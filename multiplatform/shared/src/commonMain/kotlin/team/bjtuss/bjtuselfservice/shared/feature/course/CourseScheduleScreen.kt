@@ -58,7 +58,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.drop
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -686,7 +689,9 @@ private fun WeekGrid(
     onOpen: (Int) -> Unit,
     modifier: Modifier,
 ) {
-    val byLocation = courses.groupBy(Course::courseLocationIndex)
+    // 课件页/刷新会让壳层频繁重组，这里必须固定住：每次重组都 groupBy 一遍
+    // 整学期课程会白白丢掉一帧。
+    val byLocation = remember(courses) { courses.groupBy(Course::courseLocationIndex) }
     Column(
         modifier = modifier.border(
             width = 1.dp,
@@ -1044,13 +1049,14 @@ private fun CompactDayPager(
     LaunchedEffect(selectedDay) {
         if (selectedDay != pagerState.currentPage) pagerState.scrollToPage(selectedDay)
     }
+    // 分页只切天，课程集合与所有页共用；放在页内会让每页各自 groupBy 一次。
+    val byLocation = remember(courses) { courses.groupBy(Course::courseLocationIndex) }
     HorizontalPager(
         state = pagerState,
         modifier = modifier,
         beyondViewportPageCount = 1,
         pageSpacing = 12.dp,
     ) { day ->
-        val byLocation = courses.groupBy(Course::courseLocationIndex)
         val listState = rememberLazyListState()
         LazyColumn(
             state = listState,
@@ -1083,9 +1089,23 @@ private fun ExpandedWeekPager(
     val pagerState = rememberPagerState(initialPage = overviewPageForWeek(initialPage)) {
         COURSE_OVERVIEW_PAGE_COUNT
     }
-    LaunchedEffect(pagerState.currentPage) {
-        val week = weekForOverviewPage(pagerState.currentPage)
-        if (state.selectedWeek != week) model.selectWeek(week)
+    val currentSelectedWeek by rememberUpdatedState(state.selectedWeek)
+    /*
+     * 回写必须等分页「落定」（settledPage），不能用 currentPage。
+     *
+     * 旧实现监听 currentPage：校准/切学期触发 0→26 这类跨多页滚动时，滚动刚越过半页
+     * currentPage 就变成 1，于是回写 selectWeek(1)；`selectWeek` 又是
+     * LaunchedEffect(state.selectedWeek) 的键，键一变就把正在进行的 animateScrollToPage
+     * 取消掉，并把 followCurrentWeek 永久置 false。结果是宽屏 Android/iOS 课表锁死在第 1 周，
+     * 而课程在第 24～27 周，表格看起来整片空白（Windows 走 AnimatedContent，不受影响）。
+     */
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }
+            .drop(1)
+            .collect { page ->
+                val week = weekForOverviewPage(page)
+                if (currentSelectedWeek != week) model.selectWeek(week)
+            }
     }
     LaunchedEffect(state.selectedWeek) {
         val target = overviewPageForWeek(state.selectedWeek)
@@ -1102,8 +1122,13 @@ private fun ExpandedWeekPager(
         beyondViewportPageCount = 1,
         pageSpacing = 8.dp,
     ) { page ->
+        // `scheduleCourses` 是每次访问都重新过滤的 getter，不能直接当 remember key；
+        // 用它的真实输入（课程表 + 本学期/选课）加周次做键。
+        val weekCourses = remember(state.courses, state.scheduleType, page) {
+            coursesForWeek(state.scheduleCourses, page)
+        }
         WeekGrid(
-            courses = coursesForWeek(state.scheduleCourses, page),
+            courses = weekCourses,
             courseTypesByCode = courseTypesByCode,
             weekStartDate = state.weekDate(page)?.startDate,
             selectedCourseId = state.selectedCourseId,
@@ -1164,8 +1189,11 @@ private fun CompactWeekPager(
             pageSpacing = 12.dp,
         ) { page ->
             val week = page
+            val weekCourses = remember(state.courses, state.scheduleType, week) {
+                coursesForWeek(state.scheduleCourses, week)
+            }
             CompactWeekGrid(
-                courses = coursesForWeek(state.scheduleCourses, week),
+                courses = weekCourses,
                 courseTypesByCode = courseTypesByCode,
                 aggregateAllWeeks = week == 0,
                 weekStartDate = state.weekDate(week)?.startDate,
@@ -1225,7 +1253,7 @@ private fun CompactWeekGrid(
     onOpen: (Int) -> Unit,
     modifier: Modifier,
 ) {
-    val byLocation = courses.groupBy(Course::courseLocationIndex)
+    val byLocation = remember(courses) { courses.groupBy(Course::courseLocationIndex) }
     Column(
         modifier = modifier
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(13.dp))
@@ -1295,17 +1323,25 @@ private fun CompactCourseGridCell(
         .padding(2.dp)
     if (aggregateAllWeeks && courses.size > 1) {
         // “全部教学周”把同一时间位置的单双周/交替课程并排分格；具体周页仍只显示当周课程。
+        // 排序键必须预计算：写在比较器里会让 `parseCourseWeeks` 跑 O(n log n) 次，
+        // 而它每次都要 replace + split + toInt。
+        val ordered = remember(courses) {
+            courses
+                .map { course -> course to (parseCourseWeeks(course.courseTime).minOrNull() ?: Int.MAX_VALUE) }
+                .sortedWith(
+                    compareBy<Pair<Course, Int>>(
+                        { it.second },
+                        { it.first.courseId },
+                        { it.first.id },
+                    ),
+                )
+                .map { (course, _) -> course }
+        }
         Row(
             modifier = cellModifier,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            courses.sortedWith(
-                compareBy<Course>(
-                    { parseCourseWeeks(it.courseTime).minOrNull() ?: Int.MAX_VALUE },
-                    Course::courseId,
-                    Course::id,
-                ),
-            ).forEach { course ->
+            ordered.forEach { course ->
                 CompactCourseColorBlock(
                     course = course,
                     courseTypesByCode = courseTypesByCode,
@@ -1346,12 +1382,32 @@ private fun CompactCourseColorBlock(
     Surface(
         onClick = { onOpen(course.id) },
         modifier = modifier.semantics {
-            contentDescription = "${course.courseName}，${course.courseTime}，${displayCoursePlace(course.coursePlace)}，点按查看详情"
+            contentDescription = "${course.courseName}，${course.courseTime}，" +
+                "${displayCoursePlace(course.coursePlace)}，点按查看详情"
         },
         color = colors.container,
         shape = RoundedCornerShape(5.dp),
         border = androidx.compose.foundation.BorderStroke(0.5.dp, colors.border),
-    ) {}
+    ) {
+        // 必须显示课程名：紧凑端默认视图就是这张 7×7 概览表，只有颜色的话手机用户
+        // 完全看不出哪一格是哪门课，只能逐格点开。格宽约 40dp，8sp 中文刚好放得下
+        // 两行四字课名；再长的用省略号，完整信息仍在点按后的详情里。
+        Box(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 1.dp, vertical = 1.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = course.courseName,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, lineHeight = 9.sp),
+                fontWeight = FontWeight.SemiBold,
+                color = colors.onContainer,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                softWrap = true,
+            )
+        }
+    }
 }
 
 @Composable

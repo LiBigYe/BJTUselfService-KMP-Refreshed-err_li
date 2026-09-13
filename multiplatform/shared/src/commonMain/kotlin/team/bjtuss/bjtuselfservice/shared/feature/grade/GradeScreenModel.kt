@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import team.bjtuss.bjtuselfservice.shared.data.grade.GradeRefreshResult
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.data.grade.GradeRepository
 import team.bjtuss.bjtuselfservice.shared.data.grade.GradeSyncFailure
 import team.bjtuss.bjtuselfservice.shared.data.home.gradeChangeRecords
@@ -166,7 +167,7 @@ class GradeScreenModel(
     suspend fun initialize(refreshFromNetwork: Boolean = true) {
         if (!cacheLoaded) {
             cacheLoaded = true
-            val cached = runCatching(repository::load).getOrNull()
+            val cached = runCatching { onSchoolWork { repository.load() } }.getOrNull()
             if (cached != null) {
                 val semesterOptions = cached.grades.map(Grade::semester).filter(String::isNotBlank).toSet()
                 mutableState.value = mutableState.value.copy(

@@ -1,9 +1,11 @@
 package team.bjtuss.bjtuselfservice.shared.feature.exam
 
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import team.bjtuss.bjtuselfservice.shared.data.exam.ExamScheduleRefreshResult
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.data.exam.ExamScheduleRepository
 import team.bjtuss.bjtuselfservice.shared.data.exam.ExamScheduleSnapshot
 import team.bjtuss.bjtuselfservice.shared.data.exam.ExamScheduleSyncFailure
@@ -16,6 +18,13 @@ enum class ExamScheduleContentSource {
     NETWORK,
 }
 
+/**
+ * 考试页状态。
+ *
+ * `@Immutable`：`exams` 等集合字段不标注时 Compose 判为不稳定，整页无法跳过重组。
+ * 集合都在 [copy] 时整体替换，不会被就地修改。
+ */
+@Immutable
 data class ExamScheduleUiState(
     val exams: List<ExamSchedule> = emptyList(),
     val selectedType: String? = null,
@@ -25,14 +34,13 @@ data class ExamScheduleUiState(
     val source: ExamScheduleContentSource? = null,
     val failure: ExamScheduleSyncFailure? = null,
 ) {
-    val typeOptions: List<String>
-        get() = exams.map(ExamSchedule::examType).filter(String::isNotBlank).distinct()
+    // 原本是 get()：一次重组会读 5 次，每次都重新 map+filter。改为构造时算一次。
+    val typeOptions: List<String> = exams.map(ExamSchedule::examType).filter(String::isNotBlank).distinct()
 
-    val visibleExams: List<ExamSchedule>
-        get() = selectedType?.let { type -> exams.filter { it.examType == type } } ?: exams
+    val visibleExams: List<ExamSchedule> =
+        selectedType?.let { type -> exams.filter { it.examType == type } } ?: exams
 
-    val selectedExam: ExamSchedule?
-        get() = exams.firstOrNull { it.id == selectedExamId }
+    val selectedExam: ExamSchedule? = exams.firstOrNull { it.id == selectedExamId }
 }
 
 class ExamScheduleScreenModel(
@@ -52,7 +60,7 @@ class ExamScheduleScreenModel(
     suspend fun initialize(refreshFromNetwork: Boolean = true) {
         if (!cacheLoaded) {
             cacheLoaded = true
-            val cached = runCatching(repository::load).getOrNull()
+            val cached = runCatching { onSchoolWork { repository.load() } }.getOrNull()
             if (cached != null) {
                 applySnapshot(
                     cached,

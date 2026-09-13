@@ -21,11 +21,6 @@ private const val CURRENT_WEEK_URL =
 private const val SMART_MODULE_URL = "https://mis.bjtu.edu.cn/module/module/28/"
 private const val TIME_LIST_PATH = "/ve/back/coursePlatform/course.shtml"
 
-data class RemoteCourseScheduleSnapshot(
-    val courses: List<Course>,
-    val currentWeek: Int,
-)
-
 enum class CourseScheduleRemoteFailure {
     NETWORK,
     SESSION_EXPIRED,
@@ -37,7 +32,7 @@ class CourseScheduleRemoteException(
 ) : Exception("Unable to refresh course schedule: ${reason.name}")
 
 interface CourseScheduleRemoteDataSource {
-    suspend fun fetchSchedule(): RemoteCourseScheduleSnapshot
+    suspend fun fetchSchedule(): CourseScheduleSnapshot
 }
 
 class SchoolCourseScheduleRemoteDataSource(
@@ -45,7 +40,7 @@ class SchoolCourseScheduleRemoteDataSource(
     private val requestDelayMillis: Long = 100,
     private val endpoint: SmartPlatformEndpoint? = null,
 ) : CourseScheduleRemoteDataSource {
-    override suspend fun fetchSchedule(): RemoteCourseScheduleSnapshot {
+    override suspend fun fetchSchedule(): CourseScheduleSnapshot {
         val teacherResponse = request(TEACHER_URL)
         val teachers = when (val parsed = parseTeacherTable(teacherResponse.bodyText())) {
             is TeacherTableParseResult.Failure -> malformed()
@@ -65,7 +60,7 @@ class SchoolCourseScheduleRemoteDataSource(
             teachers = teachers,
         )
 
-        return RemoteCourseScheduleSnapshot(
+        return CourseScheduleSnapshot(
             courses = (currentCourses + selectionCourses).distinctBy { course ->
                 listOf(
                     course.courseId,

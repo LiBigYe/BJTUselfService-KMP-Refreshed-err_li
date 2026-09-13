@@ -2,6 +2,7 @@ package team.bjtuss.bjtuselfservice.shared.data.course
 
 import kotlinx.coroutines.CancellationException
 import team.bjtuss.bjtuselfservice.shared.cache.CacheStore
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.course.Course
 
 data class CourseScheduleSnapshot(
@@ -72,23 +73,23 @@ class DefaultCourseScheduleRepository(
         }.getOrElse { fallback }
     }
 
-    override suspend fun refresh(): CourseScheduleRefreshResult {
+    /**
+     * 整段跑在 [onSchoolWork] 上：课表刷新要解析教师表 + 两张 7×7 HTML 表格，
+     * 再全量替换课程行；留在 UI 线程上会明显掉帧。
+     */
+    override suspend fun refresh(): CourseScheduleRefreshResult = onSchoolWork {
         val fallback = runCatching(::load).getOrElse { CourseScheduleSnapshot(emptyList(), 0) }
-        val remoteSnapshot = try {
+        val snapshot = try {
             remote.fetchSchedule()
         } catch (error: CancellationException) {
             throw error
         } catch (error: CourseScheduleRemoteException) {
-            return CourseScheduleRefreshResult.Failure(fallback, error.reason.toSyncFailure())
+            return@onSchoolWork CourseScheduleRefreshResult.Failure(fallback, error.reason.toSyncFailure())
         } catch (_: Exception) {
-            return CourseScheduleRefreshResult.Failure(fallback, CourseScheduleSyncFailure.NETWORK)
+            return@onSchoolWork CourseScheduleRefreshResult.Failure(fallback, CourseScheduleSyncFailure.NETWORK)
         }
 
-        val snapshot = CourseScheduleSnapshot(
-            courses = remoteSnapshot.courses,
-            currentWeek = remoteSnapshot.currentWeek,
-        )
-        return try {
+        try {
             local.replace(accountScope, snapshot)
             CourseScheduleRefreshResult.Success(local.load(accountScope))
         } catch (_: Exception) {

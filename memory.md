@@ -1,7 +1,9 @@
 # BJTUselfService KMP 迁移工作记忆
 
-> 最后更新：2026-08-31
+> 最后更新：2026-09-13
 > 当前分支：`main`；显示/打包版本 **`1.7.5-KMP`**。邮箱详情长转圈修复已提交并推送，替换上一版空页修复。未改 `windowsApp/`、`desktopApp/`。Windows 本机无法打 IPA，由用户在 Mac 打包。Android debug 已重装到 `25091RP04C`。
+> **2026-09-13 性能专项（本轮，未提交）**：针对“Windows/Android 刷新掉帧、网页与数据更新卡顿、读不到校园卡/校园网余额”做根因修复。三条主因：①`KtorSchoolHttpTransport` 用一把全局 `Mutex` 串行化**所有**会话请求（首页一次刷新扇出约 60–90 个请求，时延相加）；②解析（Ksoup/严格 JSON/GB18030）与 SQLite 读写全部跑在调用方调度器上，也就是 Android 主线程 / 桌面 AWT EDT；③`HomeStatusJsonParser` 三字段全有才算成功，任缺一个就把校园卡与校园网余额一起丢掉。详见“本阶段已做到”。
+
 > 阶段状态：**173B 基座已同步；M13 代码层初步开发完成。校历入口已移除失效下载接口并改为公众号文章。M15 邮箱已完成 Coremail 只读文件夹/列表/详情扩展，宽屏三栏与紧凑端文件夹选择/二级阅读 UI 按 Apple Mail 方向重做；紧凑端邮箱主页、邮件详情和写信/回复现统一采用平台原生页面层级（Android Activity、iOS UIKit push），与两个教室查询入口保持一致；根页面转场期间不再先显示内嵌详情，避免重复视觉跳转。紧凑端当前文件夹 banner 负责文件夹切换，邮箱右上角胶囊显示“刷新”；HTML 表格正文已结构化渲染。当前已补上写信/回复首版和 `MAILBOX_COMPOSE` 原生编辑页，发送前确认但未实际发送，详情返回统一到左上角。Windows 与 Android x86_64 模拟器均已用真实登录态核对邮箱主页、当前文件夹 banner、刷新控件和编辑页，Android 另核对普通刷新、邮件详情、回复预填和发送确认。Mac 已有真实登录态列表/详情证据，真实发送/删除/附件下载和真实登录后的 iOS 邮箱验收未完成。M16 VPN 仅保留调研，当前不开发。PR #3 已合入。Android 已改为本地/CI 共用上传签名（证书 SHA-256 `5d0dabc3…c773`）。`v1.7.4-KMP` Release Android 包为仅 `arm64-v8a`、无 debug 文件名（142,270,345 字节）。本轮已在 `C:\Users\zjg\Android\Sdk` 恢复 Android SDK/`adb`/模拟器；Android x86_64 debug 构建、安装、登录和邮箱视觉回归均完成，实体 iPhone 仍缺 provisioning profile。当前版本为 `1.7.5-KMP`。**
 > 分支创建点：`9d8da18`；上游对照基线：`v1.7.0@419313d`；KMP 自身基线：**`v1.7.3-KMP-B` (`a342615`)**；当前版本 **`1.7.5-KMP`**（待 Mac/iOS 验收后打 tag）；上一发布 `v1.7.4-KMP` 保留。
 > 完整历史与已归档的验收细节：见 `history_full.md`（按里程碑归档，只读）
@@ -9,6 +11,15 @@
 
 ## 1. 本阶段已做到（≤10 行）
 
+- **2026-09-13 性能专项（本轮，工作区未提交）**：
+  - **网络不再串行**：`KtorSchoolHttpTransport` 去掉全局 `requestMutex`，改用 `Semaphore(4)` 有界并发；会话超时 30s/15s/30s → 15s/8s/15s。依据是 Ktor 3.5.1 的 `AcceptAllCookiesStorage` 内部自带 `Mutex`+atomicfu，原注释“非线程安全”不成立（已核对 ktor-client-core 3.5.1 源码）。`clearSession()` 改为整体替换不可变 `Session` + `@Volatile`。CAS 登录流程的互斥挪进 `SchoolLoginProtocol`，保证两条登录流程不交错。
+  - **解析与 SQLite 离开 UI 线程**：新增 `shared/data/SchoolWorkDispatcher.kt`（`onSchoolWork`）。Course/Grade/Homework/Exam/Courseware/Classroom/ClassroomOccupancy/PhyVlab/OtherFunction/HomeStatus 的 repository `suspend` 方法与各 ScreenModel 的缓存载入都改走 `Dispatchers.Default`。
+  - **余额逐字段降级**：`parseHomeStatusJson` 改用宽松 JSON（容忍 UTF-8 BOM 与 JSON 后的尾随内容），单字段缺失/空串只让该卡片显示 `—`，不再三个一起失败；`HomeScreen` 空串与 null 统一显示 `—`。
+  - **砍掉冗余请求**：首页刷新不再顺带拉培养方案（`(1+N)` 个请求）；课表/作业只对 `NETWORK` 失败重试（会话过期、结构错误、明文通道被拒不再把整批请求跑三遍）；第三方教室接口改用共享 transport 的 `executePublic`，删掉每次登录都白建的整套客户端与引擎线程池。
+  - **Compose 重组收敛**：`CourseScheduleUiState`/`HomeworkUiState`/`ExamScheduleUiState`/`MailboxUiState.Ready`/`HomeUiState` 加 `@Immutable`；`scheduleCourses`/`visibleCourses`/`visibleHomework`/`dueSoonCount`/`visibleExams`/`typeOptions` 从每次读取重算的 `get()` 改为构造时算一次；`groupBy`、`coursesForWeek`、交替课程排序比较器（原本 O(n log n) 次 `parseCourseWeeks`）、邮件预览与作业正文的 Ksoup 解析全部 `remember`；壳层 `buildHomeSyncItems` 三个聚合值改为 `remember`；`currentPlatform()` 桌面端缓存。
+  - **课表缺陷**：紧凑端（默认 7×7 概览）色块内补上课程名——此前格内只有颜色，手机上完全看不出哪格是哪门课；`ExpandedWeekPager` 回写改 `snapshotFlow { settledPage }`，修掉宽屏 Android/iOS 因中途回写取消 `animateScrollToPage` 并把 `followCurrentWeek` 锁死在第 1 周的空白表格；`dateOutsideTeachingWeeks` 不再只能靠选周/选日解除。
+  - **消融**：删除与 `CourseScheduleSnapshot` 完全同构、只做字段搬运的 `RemoteCourseScheduleSnapshot`。
+  - **验证**：`:shared:desktopTest` **476 项通过 / 1 项失败**，唯一失败是 `MacOsKeychainCredentialVaultTest`（需要 macOS 钥匙串，本机 Windows 必然失败，与改动无关）；`:desktopApp:compileKotlin`、`:windowsApp:compileKotlinWindows` 编译通过。新增回归：余额 BOM/尾随内容/单字段缺失/缺全字段共 5 项、课表空态解除 2 项、登录流程不交错 1 项。
 - **第一阶段收口 + `1.7.1-KMP`/`1.7.2-KMP` + M12 + `1.7.2-KMP-A` + M14 Windows**：细节见 `history_full.md`。
 - **2026-08-17 `1.7.3-KMP-B` 基座**：教学周改 `getTimeList`；作业容错对齐 1.7.0；CI、Windows MSI ASCII 修复、macOS JDK/iOS 任务拆分均已合入 `a342615`。2026-08-29 实测学期末 `getTimeList` 与 `room_view` 都可能误给第 1 周，现用当前学期校历按日期校正并把校正值写回缓存：只有当前日期命中当前学期校历时才允许覆盖；校历未确认时保留可追溯缓存，无缓存显示未知，禁止把远端裸第 1 周展示给用户。教学周范围统一为 1–30。
 - **Windows 移植（M14）**：DPAPI 凭据保险库、%LOCALAPPDATA% 缓存、AWT 文件网关、系统浏览器、Ktor CIO、GB18030、验证码推理、品牌图标与打包链路已实现；细节见 `history_full.md`。
@@ -46,9 +57,9 @@
 
 - **Windows 安装器品牌化受限**：jpackage 安装向导 UI（横幅、右上角图标、进度框）无参数可定制；安装完成后的 EXE/快捷方式/窗口/任务栏图标已是品牌 logo。若用户要完全品牌化安装向导，需引入 Inno Setup 等替代打包管线（未授权、未规划）。
 - **构建环境**：compose 1.12.0-beta03 要求 compileSdk 37；Android SDK/`adb`/模拟器已恢复到 `C:\Users\zjg\Android\Sdk`，x86_64 debug 验证通过构建、安装、登录和邮箱页面视觉回归。Mac 侧 Xcode 27.0、iOS Simulator/iphoneos arm64 构建和 macOS arm64 分发构建均通过；实体机和登录后的 iOS 邮箱仍待设备/签名条件。
-- **打包 JDK**：JBR 无 jlink/jpackage，需完整 JDK（本机 Microsoft JDK 21 `C:/Users/zjg/jdk21/jdk-21.0.8+9`，`WINDOWS_PACKAGE_JAVA_HOME` 可覆盖）。
-- **Windows MSI**：曾 `light.exe 311`（中文 description 进 MSI 字符串表）。KMP Android 共用上传签名已写入 GitHub Secrets（`BJTU_ANDROID_KEYSTORE_BASE64` 等四项），与本机 `~/.android/bjtu-kmp-upload.keystore` 同一把钥匙。
-- **Windows 卸载清凭据待复测**：请装带卸载清理的 MSI 后再卸，确认 AppData 缓存和注册表凭据被删。
+- **Windows 安装与打包**：jpackage 安装向导 UI（横幅、右上角图标、进度框）无参数可定制，完全品牌化需引入 Inno Setup（未授权、未规划）。打包需要完整 JDK（JBR 无 jlink/jpackage，`WINDOWS_PACKAGE_JAVA_HOME` 可覆盖）。MSI 曾 `light.exe 311`（中文 description 进 MSI 字符串表）。**卸载清理未复测**：请装带卸载清理的 MSI 后再卸，确认 AppData 缓存和注册表凭据被删。
+- **本轮性能改动未实测**：本机没有 `C:\Users\zjg` 那套 Android SDK/模拟器，`multiplatform/androidApp` 又缺上传签名 `bjtu-kmp-upload.keystore`，整个 Gradle 配置阶段就失败，因此**无法编译或安装 Android 目标**；Windows 侧本轮用户用的是安装版 MSI，所以真实服务器上的并发表现、Windows 端帧率、Android 课表显示都还没有实测证据。所有改动都是 `commonMain`（外加一个 `desktopMain` 文件），已用 desktop JVM 目标编译 + 476 项单测覆盖。
+- **并发与节流参数待调**：`SESSION_MAX_CONCURRENCY = 4`（`KtorSchoolHttpTransport`）和各 data source 的 `requestDelayMillis = 100` 是保守默认值。若真机仍见并发失败，先把并发降到 2 或 1；若确认服务器不敏感，可把 100ms 节流降到 0，课表一次刷新最多能省 1.6s。
 - **iOS 真机签名/连接**：generic iPhoneOS unsigned 构建通过，但当前 Bundle ID 没有匹配 provisioning profile；实体 iPhone 在 `devicectl` 中为 `unavailable`，合法签名、安装、Keychain 往返仍未取得证据。
 - **验证码发布级准确率仍待扩样**；课件深层变化仍缺自然样本；官方 1.7.0 / KMP PyTorch 2.1 在 API 37.1 有 16 KB page-size 提示。
 - **M13 现场解析差异与可选编辑页**：详情页状态标签是 `作业状态`（未交为“尚未批改”），不是 fixture 的 `提交状态`；filemanager 的 context/client/repo 在脚本 JSON 里，不在 DOM `data-*`。Mac 真实登录态课程/活动和主详情读取成功；已提交作业没有可用 filemanager，辅助 `action=editsubmission` 页返回 404 时按可选能力处理，不再覆盖主详情。真实上传仍未执行；Android/iOS 登录后 M13、REST token、Unity 外链仍待后续。arm64-only APK 不能装 x86_64 模拟器。
@@ -56,9 +67,9 @@
 
 ## 3. 接下来 1～3 个阶段
 
-1. **发布 `1.7.5-KMP`**：用户在 Mac/iOS 用最新 `main` 做最终验收后打 tag、建 GitHub Release。本轮已推送邮箱详情修复，不打 tag。
-2. **M15 邮箱读写验收与扩展**：真实发送、删除、移动、附件下载仍待单独切片。
-3. **M13 Apple 端补验**：实体 iPhone 取得合法 provisioning profile 后安装；真实上传仍需用户明确确认。
+1. **复测本轮性能改动**：在真机/实体 Windows 上用真实账号核对 (a) 首页校园卡与校园网余额能出现数值；(b) 首页刷新不再长时间「同步中」；(c) 各页切换与刷新掉帧改善；(d) Android 课表格内能看到课程名。若仍见并发失败再调 `SESSION_MAX_CONCURRENCY`。
+2. **发布 `1.7.5-KMP`**：用户在 Mac/iOS 用最新 `main` 做最终验收后打 tag、建 GitHub Release。本轮改动尚未提交，不打 tag。
+3. **M15 邮箱读写验收与扩展**：真实发送、删除、移动、附件下载仍待单独切片。M13 Apple 端补验仍卡在实体 iPhone 的 provisioning profile。
 
 ## 维护规则
 

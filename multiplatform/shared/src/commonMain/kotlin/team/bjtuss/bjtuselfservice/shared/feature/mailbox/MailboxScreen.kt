@@ -1034,8 +1034,13 @@ private fun MailboxMessageRow(
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (message.preview.isNotBlank()) {
+                        // 邮件的 preview 是 HTML；不 remember 的话每行每次重组都会跑一遍
+                        // Ksoup DOM 解析 + 两条正则。收件箱有几百封，滚起来就直接掉帧。
+                        val previewText = remember(message.preview) {
+                            schoolRichTextToPlainMultiline(message.preview)
+                        }
                         Text(
-                            schoolRichTextToPlainMultiline(message.preview),
+                            previewText,
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import team.bjtuss.bjtuselfservice.shared.data.courseware.CoursewareOperationResult
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.data.courseware.CoursewareRefreshResult
 import team.bjtuss.bjtuselfservice.shared.data.courseware.CoursewareRepository
 import team.bjtuss.bjtuselfservice.shared.data.courseware.CoursewareSyncFailure
@@ -84,7 +85,7 @@ class CoursewareScreenModel(
     suspend fun initialize() {
         if (initialized) return
         initialized = true
-        val cached = runCatching(repository::load).getOrNull()
+        val cached = runCatching { onSchoolWork { repository.load() } }.getOrNull()
         if (cached != null) {
             applySnapshot(
                 snapshot = cached,

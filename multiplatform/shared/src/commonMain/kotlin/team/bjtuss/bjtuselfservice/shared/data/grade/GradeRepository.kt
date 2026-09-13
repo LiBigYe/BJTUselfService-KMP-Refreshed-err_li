@@ -2,6 +2,7 @@ package team.bjtuss.bjtuselfservice.shared.data.grade
 
 import kotlinx.coroutines.CancellationException
 import team.bjtuss.bjtuselfservice.shared.cache.CacheStore
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.grade.CourseType
 import team.bjtuss.bjtuselfservice.shared.domain.grade.Grade
 import team.bjtuss.bjtuselfservice.shared.domain.grade.GradeSelectionRecord
@@ -122,22 +123,26 @@ class DefaultGradeRepository(
         records = local.selections(accountScope),
     )
 
-    override suspend fun refresh(): GradeRefreshResult {
+    /**
+     * 整段跑在 [onSchoolWork] 上：`fetchGrades()` 之后是整页 HTML 解析 +
+     * 全量成绩事务写入，留在 UI 线程上会直接掉帧。
+     */
+    override suspend fun refresh(): GradeRefreshResult = onSchoolWork {
         val fallback = runCatching(::load).getOrElse { GradeSnapshot(emptyList(), emptySet()) }
         val remoteGrades = try {
             remote.fetchGrades()
         } catch (error: CancellationException) {
             throw error
         } catch (error: GradeRemoteException) {
-            return GradeRefreshResult.Failure(fallback, error.reason.toSyncFailure())
+            return@onSchoolWork GradeRefreshResult.Failure(fallback, error.reason.toSyncFailure())
         } catch (_: Exception) {
-            return GradeRefreshResult.Failure(fallback, GradeSyncFailure.NETWORK)
+            return@onSchoolWork GradeRefreshResult.Failure(fallback, GradeSyncFailure.NETWORK)
         }
 
         // 培养方案抓取失败仅降级：成绩照常替换，性质映射保留上一次成功的旧数据。
         val remoteCourseTypes = fetchRemoteCourseTypes()
 
-        return try {
+        try {
             val storedRecords = local.selections(accountScope)
             val temporaryGrades = remoteGrades.mapIndexed { index, grade ->
                 grade.copy(id = index + 1)
@@ -162,9 +167,9 @@ class DefaultGradeRepository(
         }
     }
 
-    override suspend fun refreshProgramCourseTypes(): Map<String, CourseType>? {
-        val remoteCourseTypes = fetchRemoteCourseTypes() ?: return null
-        return try {
+    override suspend fun refreshProgramCourseTypes(): Map<String, CourseType>? = onSchoolWork {
+        val remoteCourseTypes = fetchRemoteCourseTypes() ?: return@onSchoolWork null
+        try {
             local.replaceCourseTypes(accountScope, remoteCourseTypes)
             local.courseTypes(accountScope)
         } catch (error: CancellationException) {

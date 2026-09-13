@@ -1,6 +1,7 @@
 package team.bjtuss.bjtuselfservice.shared.data.classroomoccupancy
 
 import kotlinx.coroutines.CancellationException
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.classroomoccupancy.ClassroomOccupancy
 import team.bjtuss.bjtuselfservice.shared.domain.classroomoccupancy.OccupancySemester
 import team.bjtuss.bjtuselfservice.shared.domain.classroomoccupancy.OccupancyWeekDate
@@ -42,34 +43,40 @@ class DefaultClassroomOccupancyRepository(
         week: Int,
         buildingId: String,
         semesterId: String?,
-    ): ClassroomOccupancyResult = try {
-        val payload = remote.fetchOccupancy(week, buildingId, semesterId)
-        ClassroomOccupancyResult.Success(
-            rooms = payload.rooms,
-            semesterOptions = payload.semesterOptions,
-        )
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: ClassroomOccupancyRemoteException) {
-        ClassroomOccupancyResult.Failure(error.reason.toSyncFailure())
-    } catch (_: Exception) {
-        ClassroomOccupancyResult.Failure(ClassroomOccupancySyncFailure.NETWORK)
+    ): ClassroomOccupancyResult = onSchoolWork {
+        try {
+            val payload = remote.fetchOccupancy(week, buildingId, semesterId)
+            ClassroomOccupancyResult.Success(
+                rooms = payload.rooms,
+                semesterOptions = payload.semesterOptions,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ClassroomOccupancyRemoteException) {
+            ClassroomOccupancyResult.Failure(error.reason.toSyncFailure())
+        } catch (_: Exception) {
+            ClassroomOccupancyResult.Failure(ClassroomOccupancySyncFailure.NETWORK)
+        }
     }
 
-    override suspend fun fetchSemesters(): SemesterOptions = try {
-        remote.fetchSemesters()
-    } catch (error: CancellationException) {
-        throw error
-    } catch (_: Exception) {
-        SemesterOptions(selected = null, all = emptyList())
+    override suspend fun fetchSemesters(): SemesterOptions = onSchoolWork {
+        try {
+            remote.fetchSemesters()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            SemesterOptions(selected = null, all = emptyList())
+        }
     }
 
-    override suspend fun fetchWeekDates(): Map<String, List<OccupancyWeekDate>> = try {
-        remote.fetchWeekDates()
-    } catch (error: CancellationException) {
-        throw error
-    } catch (_: Exception) {
-        emptyMap()
+    override suspend fun fetchWeekDates(): Map<String, List<OccupancyWeekDate>> = onSchoolWork {
+        try {
+            remote.fetchWeekDates()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            emptyMap()
+        }
     }
 }
 

@@ -2,6 +2,7 @@ package team.bjtuss.bjtuselfservice.shared.data.homework
 
 import kotlinx.coroutines.CancellationException
 import team.bjtuss.bjtuselfservice.shared.cache.CacheStore
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.homework.Homework
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkAttachment
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkDetail
@@ -85,18 +86,18 @@ class DefaultHomeworkRepository(
 
     override fun load(): HomeworkSnapshot = local.load(accountScope)
 
-    override suspend fun refresh(): HomeworkRefreshResult {
+    override suspend fun refresh(): HomeworkRefreshResult = onSchoolWork {
         val fallback = runCatching(::load).getOrElse { HomeworkSnapshot(emptyList()) }
         val remoteHomework = try {
             remote.fetchHomework()
         } catch (error: CancellationException) {
             throw error
         } catch (error: HomeworkRemoteException) {
-            return HomeworkRefreshResult.Failure(fallback, error.reason.toSyncFailure())
+            return@onSchoolWork HomeworkRefreshResult.Failure(fallback, error.reason.toSyncFailure())
         } catch (_: Exception) {
-            return HomeworkRefreshResult.Failure(fallback, HomeworkSyncFailure.NETWORK)
+            return@onSchoolWork HomeworkRefreshResult.Failure(fallback, HomeworkSyncFailure.NETWORK)
         }
-        return try {
+        try {
             local.replace(accountScope, remoteHomework)
             HomeworkRefreshResult.Success(local.load(accountScope))
         } catch (_: Exception) {
@@ -107,14 +108,16 @@ class DefaultHomeworkRepository(
         }
     }
 
-    override suspend fun loadDetail(homework: Homework): HomeworkDetailResult = try {
-        HomeworkDetailResult.Success(remote.fetchDetail(homework))
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: HomeworkRemoteException) {
-        HomeworkDetailResult.Failure(error.reason.toSyncFailure())
-    } catch (_: Exception) {
-        HomeworkDetailResult.Failure(HomeworkSyncFailure.NETWORK)
+    override suspend fun loadDetail(homework: Homework): HomeworkDetailResult = onSchoolWork {
+        try {
+            HomeworkDetailResult.Success(remote.fetchDetail(homework))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: HomeworkRemoteException) {
+            HomeworkDetailResult.Failure(error.reason.toSyncFailure())
+        } catch (_: Exception) {
+            HomeworkDetailResult.Failure(HomeworkSyncFailure.NETWORK)
+        }
     }
 
     override suspend fun loadSubmittedAttachments(
@@ -148,15 +151,18 @@ class DefaultHomeworkRepository(
     override fun attachmentDownloadUrl(homeworkId: Int, attachmentId: Int): String =
         remote.attachmentDownloadUrl(homeworkId, attachmentId)
 
-    private suspend fun <T> remoteOperation(block: suspend () -> T): HomeworkOperationResult<T> = try {
-        HomeworkOperationResult.Success(block())
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: HomeworkRemoteException) {
-        HomeworkOperationResult.Failure(error.reason.toSyncFailure())
-    } catch (_: Exception) {
-        HomeworkOperationResult.Failure(HomeworkSyncFailure.NETWORK)
-    }
+    private suspend fun <T> remoteOperation(block: suspend () -> T): HomeworkOperationResult<T> =
+        onSchoolWork {
+            try {
+                HomeworkOperationResult.Success(block())
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: HomeworkRemoteException) {
+                HomeworkOperationResult.Failure(error.reason.toSyncFailure())
+            } catch (_: Exception) {
+                HomeworkOperationResult.Failure(HomeworkSyncFailure.NETWORK)
+            }
+        }
 }
 
 private fun HomeworkRemoteFailure.toSyncFailure(): HomeworkSyncFailure = when (this) {

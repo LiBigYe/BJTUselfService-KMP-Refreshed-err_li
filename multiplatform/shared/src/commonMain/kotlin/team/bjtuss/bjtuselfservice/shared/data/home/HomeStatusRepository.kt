@@ -2,6 +2,7 @@ package team.bjtuss.bjtuselfservice.shared.data.home
 
 import kotlinx.coroutines.CancellationException
 import team.bjtuss.bjtuselfservice.shared.cache.CacheStore
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.home.HomeStatus
 
 private const val HOME_STATUS_CACHE_KEY = "home_status_v1"
@@ -43,18 +44,18 @@ class DefaultHomeStatusRepository(
 ) : HomeStatusRepository {
     override fun load(): HomeStatus? = local.load(accountScope)
 
-    override suspend fun refresh(): HomeStatusRefreshResult {
+    override suspend fun refresh(): HomeStatusRefreshResult = onSchoolWork {
         val cached = runCatching(::load).getOrNull()
         val fresh = try {
             remote.fetch()
         } catch (error: CancellationException) {
             throw error
         } catch (error: HomeStatusRemoteException) {
-            return HomeStatusRefreshResult.Failure(cached, error.reason)
+            return@onSchoolWork HomeStatusRefreshResult.Failure(cached, error.reason)
         } catch (_: Exception) {
-            return HomeStatusRefreshResult.Failure(cached, HomeStatusFailure.NETWORK)
+            return@onSchoolWork HomeStatusRefreshResult.Failure(cached, HomeStatusFailure.NETWORK)
         }
-        return try {
+        try {
             local.replace(accountScope, fresh)
             HomeStatusRefreshResult.Success(fresh)
         } catch (_: Exception) {

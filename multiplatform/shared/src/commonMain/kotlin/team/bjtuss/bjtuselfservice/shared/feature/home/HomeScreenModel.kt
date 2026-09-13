@@ -1,5 +1,6 @@
 package team.bjtuss.bjtuselfservice.shared.feature.home
 
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -8,8 +9,10 @@ import kotlinx.coroutines.sync.Mutex
 import team.bjtuss.bjtuselfservice.shared.data.home.HomeStatusFailure
 import team.bjtuss.bjtuselfservice.shared.data.home.HomeStatusRefreshResult
 import team.bjtuss.bjtuselfservice.shared.data.home.HomeStatusRepository
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.home.HomeStatus
 
+@Immutable
 data class HomeUiState(
     val status: HomeStatus? = null,
     val isRefreshing: Boolean = false,
@@ -23,7 +26,10 @@ class HomeScreenModel(private val repository: HomeStatusRepository) {
 
     suspend fun initialize() {
         if (mutableState.value.status == null) {
-            mutableState.value = mutableState.value.copy(status = runCatching(repository::load).getOrNull())
+            // SQLite 读取不能在 UI 线程上做：这里是每次进入首页的必经路径。
+            mutableState.value = mutableState.value.copy(
+                status = runCatching { onSchoolWork { repository.load() } }.getOrNull(),
+            )
             refresh()
         }
     }

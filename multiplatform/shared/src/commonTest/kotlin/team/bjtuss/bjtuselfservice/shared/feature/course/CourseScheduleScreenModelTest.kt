@@ -650,6 +650,58 @@ class CourseScheduleScreenModelTest {
         assertEquals(listOf(updated), captured?.second)
     }
 
+    /**
+     * 「不在教学周」是紧凑列表的空态开关。它此前只在 selectDate 里被置位，之后除了
+     * 手动选周/选日没有任何解除路径：如果用户在校历加载完成前选了一个日期，整页会
+     * 一直停在空态。校历到位后必须按当前校历复核。
+     */
+    @Test
+    fun calendarLoadClearsOutsideTeachingWeeksPickedBeforeCalendarWasReady() = runBlocking {
+        val snapshot = CourseScheduleSnapshot(listOf(course(1, week = 1)), 1)
+        val model = CourseScheduleScreenModel(
+            repository = FakeRepository(snapshot, snapshot),
+            calendarRepository = FakeCalendarRepository(
+                weeks = listOf(week(1, LocalDate(2026, 9, 7))),
+                selectedLabel = "2026-2027-1",
+            ),
+            todayProvider = { LocalDate(2026, 9, 9) },
+        )
+
+        model.initialize(refreshFromNetwork = false)
+        // 校历尚未加载：这个日期不属于任何已知教学周。
+        model.selectDate(LocalDate(2026, 9, 8))
+        assertTrue(model.state.value.dateOutsideTeachingWeeks)
+
+        model.ensureCalendarLoaded()
+
+        assertFalse(model.state.value.dateOutsideTeachingWeeks)
+        // 空态解除后列表必须重新有内容，这才是用户看到的结果。
+        assertTrue(model.state.value.visibleCourses.isNotEmpty())
+    }
+
+    /** 反向保护：日期确实不在教学周内时，刷新不能把空态误清掉。 */
+    @Test
+    fun refreshKeepsOutsideTeachingWeeksWhenDateIsStillOutsideTheCalendar() = runBlocking {
+        val snapshot = CourseScheduleSnapshot(listOf(course(1, week = 1)), 1)
+        val model = CourseScheduleScreenModel(
+            repository = FakeRepository(snapshot, snapshot),
+            calendarRepository = FakeCalendarRepository(
+                weeks = listOf(week(1, LocalDate(2026, 9, 7))),
+                selectedLabel = "2026-2027-1",
+            ),
+            todayProvider = { LocalDate(2026, 9, 9) },
+        )
+
+        model.initialize(refreshFromNetwork = false)
+        model.ensureCalendarLoaded()
+        model.selectDate(LocalDate(2026, 12, 25))
+        assertTrue(model.state.value.dateOutsideTeachingWeeks)
+
+        model.refresh()
+
+        assertTrue(model.state.value.dateOutsideTeachingWeeks)
+    }
+
     private class FakeRepository(
         private val loaded: CourseScheduleSnapshot,
         private var refreshed: CourseScheduleSnapshot,

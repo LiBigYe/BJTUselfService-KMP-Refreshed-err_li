@@ -1,5 +1,6 @@
 package team.bjtuss.bjtuselfservice.shared.feature.course
 
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,6 +15,7 @@ import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
 import team.bjtuss.bjtuselfservice.shared.data.course.CourseScheduleRefreshResult
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.data.course.CourseScheduleRepository
 import team.bjtuss.bjtuselfservice.shared.data.course.CourseScheduleSnapshot
 import team.bjtuss.bjtuselfservice.shared.data.course.CourseScheduleSyncFailure
@@ -124,6 +126,13 @@ enum class CourseCompactViewMode {
     WEEK,
 }
 
+/**
+ * 课表页状态。
+ *
+ * `@Immutable` 是必须的：`courses` 是 `List`，Compose 默认判为不稳定，整页（含 7×7 表格
+ * 与两个分页页）都会因此无法跳过重组。所有集合都在 [copy] 时整体替换，不会被就地修改。
+ */
+@Immutable
 data class CourseScheduleUiState(
     val courses: List<Course> = emptyList(),
     val currentWeek: Int = 0,
@@ -144,13 +153,17 @@ data class CourseScheduleUiState(
     val selectedDate: LocalDate? = null,
     val dateOutsideTeachingWeeks: Boolean = false,
 ) {
-    val scheduleCourses: List<Course>
-        get() = courses.filter { course ->
-            course.isCurrentSemester == (scheduleType == CourseScheduleType.SELECTION)
-        }
+    /**
+     * 这两个值原本是 `get()`，也就是说每次读取都要重新过滤整张课表并逐条 `parseCourseWeeks`。
+     * 课表页一次重组会读到它们 6 次以上（宽屏动画 + 分页 + 摘要）。状态对象本来就是不可变
+     * 且每次变更整体替换，所以在这里算一次、之后只做字段读取。
+     */
+    val scheduleCourses: List<Course> = courses.filter { course ->
+        course.isCurrentSemester == (scheduleType == CourseScheduleType.SELECTION)
+    }
 
-    val visibleCourses: List<Course>
-        get() = if (dateOutsideTeachingWeeks) emptyList() else coursesForWeek(scheduleCourses, selectedWeek)
+    val visibleCourses: List<Course> =
+        if (dateOutsideTeachingWeeks) emptyList() else coursesForWeek(scheduleCourses, selectedWeek)
 
     val selectedCourse: Course?
         get() = courses.firstOrNull { it.id == selectedCourseId }
@@ -215,7 +228,7 @@ class CourseScheduleScreenModel(
     suspend fun initialize(refreshFromNetwork: Boolean = true) {
         if (!cacheLoaded) {
             cacheLoaded = true
-            val cached = runCatching(repository::load).getOrNull()
+            val cached = runCatching { onSchoolWork { repository.load() } }.getOrNull()
             if (cached != null) {
                 applySnapshot(
                     snapshot = cached,
@@ -276,6 +289,9 @@ class CourseScheduleScreenModel(
     /**
      * 连续刷新最多 [maxAttempts] 次；任一次成功即停。
      * 用于登录后自动同步：中间失败不长期停留，最后一次失败才保留 failure 横幅。
+     *
+     * 只对 [CourseScheduleSyncFailure.NETWORK] 重试。会话过期和响应结构错误是确定性
+     * 失败，重试只会把同一批请求（课表一次最多 16 个）再跑两遍，白占并发额度。
      */
     suspend fun refreshWithRetry(
         maxAttempts: Int = AUTO_SYNC_MAX_ATTEMPTS,
@@ -284,7 +300,8 @@ class CourseScheduleScreenModel(
         require(maxAttempts >= 1)
         repeat(maxAttempts) { index ->
             refresh()
-            if (mutableState.value.failure == null) return
+            val failure = mutableState.value.failure
+            if (failure == null || failure != CourseScheduleSyncFailure.NETWORK) return
             if (index < maxAttempts - 1) delay(delayMillis)
         }
     }
@@ -445,6 +462,10 @@ class CourseScheduleScreenModel(
                     isCalendarLoading = false,
                     todayDate = today,
                     selectedDate = selectedDate,
+                    // 校历到位后如果选中的日期已经落在教学周里，「不在教学周」必须解除，
+                    // 否则紧凑列表会一直停在上一次的空态。
+                    dateOutsideTeachingWeeks = current.dateOutsideTeachingWeeks &&
+                        !weeks.coversDate(selectedDate),
                 )
                 calendarLoaded = calendarMappings.isNotEmpty()
             } catch (error: kotlinx.coroutines.CancellationException) {
@@ -502,6 +523,11 @@ class CourseScheduleScreenModel(
             repository.reconcileCurrentWeek(effectiveCurrentWeek)
         }
         val visibleIds = snapshot.courses.mapTo(mutableSetOf(), Course::id)
+        val nextSelectedDate = if (shouldApplyCurrentWeek) {
+            current.dateFor(effectiveCurrentWeek, current.selectedDay)
+        } else {
+            current.selectedDate
+        }
         mutableState.value = current.copy(
             courses = snapshot.courses,
             currentWeek = effectiveCurrentWeek,
@@ -515,11 +541,20 @@ class CourseScheduleScreenModel(
             source = source,
             failure = failure,
             todayDate = today,
-            selectedDate = if (shouldApplyCurrentWeek) {
-                current.dateFor(effectiveCurrentWeek, current.selectedDay)
-            } else {
-                current.selectedDate
-            },
+            selectedDate = nextSelectedDate,
+            // 「不在教学周」此前只在 selectDate 里被置位、之后只能靠选周/选日解除，
+            // 一次误选就会让紧凑列表在整个会话里保持空态。快照到达后按当前校历复核。
+            dateOutsideTeachingWeeks = current.dateOutsideTeachingWeeks &&
+                !current.academicWeeks.coversDate(nextSelectedDate),
         )
+    }
+}
+
+/** 选定日期是否落在这些教学周内（无日期或无该日期则为 false）。 */
+private fun List<OccupancyWeekDate>.coversDate(date: LocalDate?): Boolean {
+    if (date == null) return false
+    return any { week ->
+        val start = week.startDate ?: return@any false
+        date >= start && date <= start.plus(6, DateTimeUnit.DAY)
     }
 }

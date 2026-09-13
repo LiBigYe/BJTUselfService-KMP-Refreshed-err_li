@@ -1,5 +1,6 @@
 package team.bjtuss.bjtuselfservice.shared.feature.homework
 
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -10,6 +11,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
 import team.bjtuss.bjtuselfservice.shared.data.homework.HomeworkDetailResult
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.data.homework.HomeworkRefreshResult
 import team.bjtuss.bjtuselfservice.shared.data.homework.HomeworkRepository
 import team.bjtuss.bjtuselfservice.shared.data.homework.HomeworkOperationResult
@@ -36,6 +38,13 @@ enum class HomeworkContentSource {
 internal const val HOMEWORK_AUTO_SYNC_MAX_ATTEMPTS = 3
 internal const val HOMEWORK_AUTO_SYNC_RETRY_DELAY_MILLIS = 700L
 
+/**
+ * 作业页状态。
+ *
+ * `@Immutable`：`homework` 等集合字段若不标注，Compose 会判为不稳定，整页（含详情、
+ * 筛选条和列表）都无法跳过重组。所有集合都在 [copy] 时整体替换，不会就地修改。
+ */
+@Immutable
 data class HomeworkUiState(
     val homework: List<Homework> = emptyList(),
     val selectedCourses: Set<String> = emptySet(),
@@ -57,20 +66,23 @@ data class HomeworkUiState(
     val now: LocalDateTime = LocalDateTime(1970, 1, 1, 0, 0),
     val timeZone: TimeZone = TimeZone.UTC,
 ) {
-    val courseOptions: List<String>
-        get() = homework.map(Homework::courseName).filter(String::isNotBlank).distinct().sorted()
+    /**
+     * 下面这些原本是 `get()`：每次读取都会重新过滤 + 排序（`filterHomework` 和
+     * `sortHomework` 都会逐条解析时间字符串）。作业页一次重组会读多次，改为构造时算一次。
+     */
+    val courseOptions: List<String> = homework.map(Homework::courseName)
+        .filter(String::isNotBlank)
+        .distinct()
+        .sorted()
 
-    val visibleHomework: List<Homework>
-        get() = sortHomework(
-            filterHomework(homework, selectedCourses, hideExpired, now),
-            sortOrder,
-        )
+    val visibleHomework: List<Homework> = sortHomework(
+        filterHomework(homework, selectedCourses, hideExpired, now),
+        sortOrder,
+    )
 
-    val dueSoonCount: Int
-        get() = dueSoonHomeworkCount(visibleHomework, now, timeZone)
+    val dueSoonCount: Int = dueSoonHomeworkCount(visibleHomework, now, timeZone)
 
-    val selectedHomework: Homework?
-        get() = homework.firstOrNull { it.stableKey() == selectedHomeworkKey }
+    val selectedHomework: Homework? = homework.firstOrNull { it.stableKey() == selectedHomeworkKey }
 }
 
 class HomeworkScreenModel(
@@ -98,7 +110,7 @@ class HomeworkScreenModel(
     suspend fun initialize(refreshFromNetwork: Boolean = true) {
         if (!cacheLoaded) {
             cacheLoaded = true
-            val cached = runCatching(repository::load).getOrNull()
+            val cached = runCatching { onSchoolWork { repository.load() } }.getOrNull()
             if (cached != null) {
                 applySnapshot(
                     snapshot = cached,
@@ -163,6 +175,9 @@ class HomeworkScreenModel(
     /**
      * 连续刷新最多 [maxAttempts] 次；任一次成功即停。
      * 用于登录后自动同步：中间失败不长期停留，最后一次失败才保留 failure 横幅。
+     *
+     * 只对 [HomeworkSyncFailure.NETWORK] 重试。会话过期、响应结构错误和明文通道被拒
+     * 都是确定性失败，重试只会把同一批请求（作业一次 3×课程数 + 附件）再跑两遍。
      */
     suspend fun refreshWithRetry(
         maxAttempts: Int = HOMEWORK_AUTO_SYNC_MAX_ATTEMPTS,
@@ -171,7 +186,8 @@ class HomeworkScreenModel(
         require(maxAttempts >= 1)
         repeat(maxAttempts) { index ->
             refresh()
-            if (mutableState.value.failure == null) return
+            val failure = mutableState.value.failure
+            if (failure == null || failure != HomeworkSyncFailure.NETWORK) return
             if (index < maxAttempts - 1) delay(delayMillis)
         }
     }

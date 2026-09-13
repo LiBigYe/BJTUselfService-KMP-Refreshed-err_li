@@ -19,7 +19,11 @@ import team.bjtuss.bjtuselfservice.shared.network.SchoolHttpTransport
  *   出界即判为安全失败，不继续解析。
  * - iOS 仅对 `yaya.csoci.com` 添加域名级 ATS 例外，绝不使用
  *   `NSAllowsArbitraryLoads`；ATS 无法约束端口和路径，因此仍由本数据源强制锁定
- *   `:2333/api/classnum/`，且使用独立 transport，不携带学校登录 Cookie。
+ *   `:2333/api/classnum/`。
+ * - 走 [SchoolHttpTransport.executePublic]：公开旁路使用独立、空的 cookie jar，
+ *   不会携带任何学校登录 Cookie，也拿不到会话并发额度。此前这里是再建一整套
+ *   `createSchoolHttpTransport()`，等于每次登录都白建两个 HttpClient 和引擎线程池，
+ *   而隔离效果与公开旁路完全一致。
  */
 const val CLASSROOM_CAPACITY_ORIGIN = "http://yaya.csoci.com:2333"
 
@@ -81,7 +85,8 @@ class SchoolClassroomRemoteDataSource(
     }
 
     private suspend fun execute(request: SchoolHttpRequest): SchoolHttpResponse = try {
-        transport.execute(request)
+        // 公开旁路：独立空 cookie jar，不带学校会话，也不占会话并发额度。
+        transport.executePublic(request)
     } catch (error: CancellationException) {
         throw error
     } catch (error: Exception) {

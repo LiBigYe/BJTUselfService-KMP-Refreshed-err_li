@@ -1,5 +1,6 @@
 package team.bjtuss.bjtuselfservice.shared.feature.mailbox
 
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,9 @@ private const val MAILBOX_HOST = "mis.bjtu.edu.cn"
 sealed interface MailboxUiState {
     data object Idle : MailboxUiState
     data object Preparing : MailboxUiState
+
+    /** `@Immutable`：集合字段不标注时 Compose 判为不稳定，列表与阅读区都无法跳过重组。 */
+    @Immutable
     data class Ready(
         val request: WebPageRequest,
         val folders: List<MailboxFolderUi> = defaultMailboxFolders,

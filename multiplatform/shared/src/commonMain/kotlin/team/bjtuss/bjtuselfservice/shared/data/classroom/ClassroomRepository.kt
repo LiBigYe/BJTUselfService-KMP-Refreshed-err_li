@@ -1,6 +1,7 @@
 package team.bjtuss.bjtuselfservice.shared.data.classroom
 
 import kotlinx.coroutines.CancellationException
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.classroom.ClassroomBuildingInfo
 
 enum class ClassroomFetchFailure {
@@ -27,14 +28,16 @@ class DefaultClassroomRepository(
     private val remote: ClassroomRemoteDataSource,
 ) : ClassroomRepository {
 
-    override suspend fun fetchBuildingInfo(buildingName: String): ClassroomFetchResult = try {
-        ClassroomFetchResult.Success(remote.fetchBuildingInfo(buildingName))
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: ClassroomRemoteException) {
-        ClassroomFetchResult.Failure(error.reason.toFetchFailure())
-    } catch (_: Exception) {
-        ClassroomFetchResult.Failure(ClassroomFetchFailure.NETWORK)
+    override suspend fun fetchBuildingInfo(buildingName: String): ClassroomFetchResult = onSchoolWork {
+        try {
+            ClassroomFetchResult.Success(remote.fetchBuildingInfo(buildingName))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ClassroomRemoteException) {
+            ClassroomFetchResult.Failure(error.reason.toFetchFailure())
+        } catch (_: Exception) {
+            ClassroomFetchResult.Failure(ClassroomFetchFailure.NETWORK)
+        }
     }
 }
 

@@ -2,6 +2,7 @@ package team.bjtuss.bjtuselfservice.shared.data.phyvlab
 
 import kotlinx.coroutines.CancellationException
 import team.bjtuss.bjtuselfservice.shared.cache.CacheStore
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.phyvlab.PhyVlabActivity
 import team.bjtuss.bjtuselfservice.shared.domain.phyvlab.PhyVlabAssignmentDetail
 import team.bjtuss.bjtuselfservice.shared.domain.phyvlab.PhyVlabCourse
@@ -84,44 +85,55 @@ interface PhyVlabRepository {
 class DefaultPhyVlabRepository(
     private val remote: PhyVlabRemoteDataSource,
 ) : PhyVlabRepository {
-    override suspend fun fetchCourses(): PhyVlabCoursesResult = try {
-        PhyVlabCoursesResult.Success(remote.fetchCourses())
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: PhyVlabRemoteException) {
-        PhyVlabCoursesResult.Failure(error.reason.toSyncFailure())
-    } catch (_: Exception) {
-        PhyVlabCoursesResult.Failure(PhyVlabSyncFailure.NETWORK)
+    override suspend fun fetchCourses(): PhyVlabCoursesResult = onSchoolWork {
+        try {
+            PhyVlabCoursesResult.Success(remote.fetchCourses())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: PhyVlabRemoteException) {
+            PhyVlabCoursesResult.Failure(error.reason.toSyncFailure())
+        } catch (_: Exception) {
+            PhyVlabCoursesResult.Failure(PhyVlabSyncFailure.NETWORK)
+        }
     }
 
-    override suspend fun fetchCourseActivities(course: PhyVlabCourse): PhyVlabActivitiesResult = try {
-        PhyVlabActivitiesResult.Success(remote.fetchCourseActivities(course))
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: PhyVlabRemoteException) {
-        PhyVlabActivitiesResult.Failure(error.reason.toSyncFailure())
-    } catch (_: Exception) {
-        PhyVlabActivitiesResult.Failure(PhyVlabSyncFailure.NETWORK)
+    override suspend fun fetchCourseActivities(course: PhyVlabCourse): PhyVlabActivitiesResult =
+        onSchoolWork {
+            try {
+                PhyVlabActivitiesResult.Success(remote.fetchCourseActivities(course))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: PhyVlabRemoteException) {
+                PhyVlabActivitiesResult.Failure(error.reason.toSyncFailure())
+            } catch (_: Exception) {
+                PhyVlabActivitiesResult.Failure(PhyVlabSyncFailure.NETWORK)
+            }
+        }
+
+    override suspend fun fetchEvents(monthTimestampSeconds: Long): PhyVlabEventsResult = onSchoolWork {
+        try {
+            PhyVlabEventsResult.Success(remote.fetchEvents(monthTimestampSeconds))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: PhyVlabRemoteException) {
+            PhyVlabEventsResult.Failure(error.reason.toSyncFailure())
+        } catch (_: Exception) {
+            PhyVlabEventsResult.Failure(PhyVlabSyncFailure.NETWORK)
+        }
     }
 
-    override suspend fun fetchEvents(monthTimestampSeconds: Long): PhyVlabEventsResult = try {
-        PhyVlabEventsResult.Success(remote.fetchEvents(monthTimestampSeconds))
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: PhyVlabRemoteException) {
-        PhyVlabEventsResult.Failure(error.reason.toSyncFailure())
-    } catch (_: Exception) {
-        PhyVlabEventsResult.Failure(PhyVlabSyncFailure.NETWORK)
-    }
-
-    override suspend fun fetchAssignmentDetail(activity: PhyVlabActivity): PhyVlabAssignmentDetailResult = try {
-        PhyVlabAssignmentDetailResult.Success(remote.fetchAssignmentDetail(activity))
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: PhyVlabRemoteException) {
-        PhyVlabAssignmentDetailResult.Failure(error.reason.toSyncFailure())
-    } catch (_: Exception) {
-        PhyVlabAssignmentDetailResult.Failure(PhyVlabSyncFailure.NETWORK)
+    override suspend fun fetchAssignmentDetail(
+        activity: PhyVlabActivity,
+    ): PhyVlabAssignmentDetailResult = onSchoolWork {
+        try {
+            PhyVlabAssignmentDetailResult.Success(remote.fetchAssignmentDetail(activity))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: PhyVlabRemoteException) {
+            PhyVlabAssignmentDetailResult.Failure(error.reason.toSyncFailure())
+        } catch (_: Exception) {
+            PhyVlabAssignmentDetailResult.Failure(PhyVlabSyncFailure.NETWORK)
+        }
     }
 
     override suspend fun submitAssignment(

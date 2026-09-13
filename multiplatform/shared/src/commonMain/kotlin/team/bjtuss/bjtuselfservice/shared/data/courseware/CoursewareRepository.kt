@@ -7,6 +7,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import team.bjtuss.bjtuselfservice.shared.cache.CacheStore
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.courseware.CoursewareNode
 import team.bjtuss.bjtuselfservice.shared.domain.courseware.CoursewareCourse
 import team.bjtuss.bjtuselfservice.shared.domain.courseware.CoursewareSnapshot
@@ -98,19 +99,19 @@ class DefaultCoursewareRepository(
 
     override fun load(): CoursewareSnapshot = local.load(accountScope)
 
-    override suspend fun refresh(): CoursewareRefreshResult {
+    override suspend fun refresh(): CoursewareRefreshResult = onSchoolWork {
         val fallback = runCatching(::load).getOrElse { CoursewareSnapshot(emptyList()) }
         val remoteSnapshot = try {
             remote.fetchSnapshot()
         } catch (error: CancellationException) {
             throw error
         } catch (error: CoursewareRemoteException) {
-            return CoursewareRefreshResult.Failure(fallback, error.reason.toSyncFailure())
+            return@onSchoolWork CoursewareRefreshResult.Failure(fallback, error.reason.toSyncFailure())
         } catch (_: Exception) {
-            return CoursewareRefreshResult.Failure(fallback, CoursewareSyncFailure.NETWORK)
+            return@onSchoolWork CoursewareRefreshResult.Failure(fallback, CoursewareSyncFailure.NETWORK)
         }
         val mergedSnapshot = remoteSnapshot.mergeCachedChildren(fallback)
-        return try {
+        try {
             local.replace(accountScope, mergedSnapshot)
             CoursewareRefreshResult.Success(local.load(accountScope))
         } catch (_: Exception) {

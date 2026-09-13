@@ -14,7 +14,7 @@ class CourseScheduleRepositoryTest {
         val repository = DefaultCourseScheduleRepository(
             "student-a",
             local,
-            FakeRemote(RemoteCourseScheduleSnapshot(listOf(course(0, "新课")), 9)),
+            FakeRemote(CourseScheduleSnapshot(listOf(course(0, "新课")), 9)),
         )
 
         val result = assertIs<CourseScheduleRefreshResult.Success>(repository.refresh())
@@ -41,7 +41,7 @@ class CourseScheduleRepositoryTest {
         val localFailure = DefaultCourseScheduleRepository(
             "student-a",
             FakeLocal(cached, failReplace = true),
-            FakeRemote(RemoteCourseScheduleSnapshot(listOf(course(0, "新课")), 10)),
+            FakeRemote(CourseScheduleSnapshot(listOf(course(0, "新课")), 10)),
         )
         val second = assertIs<CourseScheduleRefreshResult.Failure>(localFailure.refresh())
         assertEquals(CourseScheduleSyncFailure.CACHE, second.reason)
@@ -54,7 +54,7 @@ class CourseScheduleRepositoryTest {
         val repository = DefaultCourseScheduleRepository(
             "student-a",
             local,
-            FakeRemote(RemoteCourseScheduleSnapshot(emptyList(), 1)),
+            FakeRemote(CourseScheduleSnapshot(emptyList(), 1)),
         )
 
         val corrected = repository.reconcileCurrentWeek(26)
@@ -65,10 +65,10 @@ class CourseScheduleRepositoryTest {
     }
 
     private class FakeRemote(
-        private val snapshot: RemoteCourseScheduleSnapshot? = null,
+        private val snapshot: CourseScheduleSnapshot? = null,
         private val error: Exception? = null,
     ) : CourseScheduleRemoteDataSource {
-        override suspend fun fetchSchedule(): RemoteCourseScheduleSnapshot {
+        override suspend fun fetchSchedule(): CourseScheduleSnapshot {
             error?.let { throw it }
             return requireNotNull(snapshot)
         }

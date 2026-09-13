@@ -345,7 +345,7 @@ private fun NetworkPaymentInstruction(family: PlatformFamily) {
 @Composable
 private fun MailCard(status: HomeStatus?, onClick: () -> Unit, modifier: Modifier) = StatusCard(
     title = "新邮件",
-    value = status?.newMailCount ?: "—",
+    value = status?.newMailCount.orUnknown(),
     detail = if (status?.hasNewMail == true) "有新邮件，记得查看" else "当前 BJTU 邮箱状态",
     action = "查看邮箱",
     onClick = onClick,
@@ -355,7 +355,7 @@ private fun MailCard(status: HomeStatus?, onClick: () -> Unit, modifier: Modifie
 @Composable
 private fun CampusCard(status: HomeStatus?, onClick: () -> Unit, modifier: Modifier) = StatusCard(
     title = "校园卡余额",
-    value = status?.campusCardBalance ?: "—",
+    value = status?.campusCardBalance.orUnknown(),
     detail = if (status?.campusCardLow == true) "余额低于 20，请留意" else "充值由完美校园完成",
     action = "前往完美校园",
     onClick = onClick,
@@ -369,12 +369,18 @@ private fun NetworkCard(
     modifier: Modifier,
 ) = StatusCard(
     title = "校园网余额",
-    value = status?.networkBalance ?: "—",
+    value = status?.networkBalance.orUnknown(),
     detail = if (status?.networkEmpty == true) "余额为 0，请及时处理" else "使用微信完成卡网缴费",
     action = "显示缴费二维码",
     onClick = onClick,
     modifier = modifier,
 )
+
+/**
+ * 服务器没返回某个字段时逐字段显示未知，而不是把整组卡片一起作废，
+ * 也不是渲染空白。空串与 null 同为未知。
+ */
+private fun String?.orUnknown(): String = this?.takeIf(String::isNotBlank) ?: "—"
 
 @Composable
 private fun StatusCard(

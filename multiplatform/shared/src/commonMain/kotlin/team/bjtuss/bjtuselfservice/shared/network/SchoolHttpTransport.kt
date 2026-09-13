@@ -90,7 +90,12 @@ data class SchoolHttpResponse(
 
 interface SchoolHttpTransport {
     /**
-     * 会话相关请求（CAS / aa / 智慧平台等）。实现应串行化，保护共享 Cookie jar。
+     * 会话相关请求（CAS / aa / 智慧平台等）。
+     *
+     * 实现必须共享同一个会话 cookie jar，但**不得**把请求整体串行化：
+     * 首页一次刷新会扇出数十个请求，串行会把总时延变成各请求时延之和。
+     * Ktor 3.x 的 `AcceptAllCookiesStorage` 自带互斥，共享 jar 可并发读写。
+     * 需要保护学校服务器时应使用有上限的并发闸门，而不是互斥锁。
      */
     suspend fun execute(request: SchoolHttpRequest): SchoolHttpResponse
 

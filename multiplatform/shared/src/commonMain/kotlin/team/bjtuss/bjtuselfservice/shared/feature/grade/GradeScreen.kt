@@ -404,32 +404,44 @@ fun AuthenticatedAppShell(
     val homeState by homeModel.state.collectAsState()
     val settingsState by settingsModel.state.collectAsState()
     val homeChanges by homeChangeFeed.records.collectAsState()
-    val homeSyncItems = buildHomeSyncItems(
-        isLoggingIn = entryLoggingIn,
-        homeBusy = homeState.isRefreshing,
-        homeFailed = homeState.failure != null,
-        homeReady = homeState.status != null,
-        gradeBusy = gradeState.isLoading || gradeState.isRefreshing,
-        gradeFailed = gradeState.failure != null,
-        gradeReady = gradeState.source != null,
-        homeworkBusy = homeworkState.isLoading || homeworkState.isRefreshing,
-        homeworkFailed = homeworkState.failure != null,
-        homeworkReady = homeworkState.source != null,
-        examBusy = examState.isLoading || examState.isRefreshing,
-        examFailed = examState.failure != null,
-        examReady = examState.source != null,
-        courseBusy = courseState.isLoading || courseState.isRefreshing || courseState.isCalendarLoading,
-        courseFailed = courseState.failure != null,
-        courseReady = courseState.source != null,
-        phyVlabBusy = phyVlabState.isLoading,
-        phyVlabFailed = phyVlabState.failure != null || phyVlabState.casLoginRequired,
-        phyVlabReady = phyVlabState.courses.isNotEmpty() || phyVlabState.agendaEvents.isNotEmpty(),
-    )
-    val homeSyncFailureItems = homeSyncItems
-        .filter { it.state == HomeSyncItemState.FAILED }
-        .map(HomeSyncItem::title)
-    val homeSyncInProgress = entryLoggingIn || homeSyncItems.any {
-        it.state == HomeSyncItemState.SYNCING
+    // 这些聚合值此前每次重组都重算。壳层同时收集 12 路状态，一次刷新会触发十几次重组，
+    // 每次都重新分配 7 个 HomeSyncItem 加两个列表；这里按真正影响结果的输入固定住。
+    val homeSyncItems = remember(
+        entryLoggingIn,
+        homeState,
+        gradeState,
+        homeworkState,
+        examState,
+        courseState,
+        phyVlabState,
+    ) {
+        buildHomeSyncItems(
+            isLoggingIn = entryLoggingIn,
+            homeBusy = homeState.isRefreshing,
+            homeFailed = homeState.failure != null,
+            homeReady = homeState.status != null,
+            gradeBusy = gradeState.isLoading || gradeState.isRefreshing,
+            gradeFailed = gradeState.failure != null,
+            gradeReady = gradeState.source != null,
+            homeworkBusy = homeworkState.isLoading || homeworkState.isRefreshing,
+            homeworkFailed = homeworkState.failure != null,
+            homeworkReady = homeworkState.source != null,
+            examBusy = examState.isLoading || examState.isRefreshing,
+            examFailed = examState.failure != null,
+            examReady = examState.source != null,
+            courseBusy = courseState.isLoading || courseState.isRefreshing || courseState.isCalendarLoading,
+            courseFailed = courseState.failure != null,
+            courseReady = courseState.source != null,
+            phyVlabBusy = phyVlabState.isLoading,
+            phyVlabFailed = phyVlabState.failure != null || phyVlabState.casLoginRequired,
+            phyVlabReady = phyVlabState.courses.isNotEmpty() || phyVlabState.agendaEvents.isNotEmpty(),
+        )
+    }
+    val homeSyncFailureItems = remember(homeSyncItems) {
+        homeSyncItems.filter { it.state == HomeSyncItemState.FAILED }.map(HomeSyncItem::title)
+    }
+    val homeSyncInProgress = remember(entryLoggingIn, homeSyncItems) {
+        entryLoggingIn || homeSyncItems.any { it.state == HomeSyncItemState.SYNCING }
     }
     var homeSyncDialogVisible by remember { mutableStateOf(false) }
     var partialSyncFailureDialogItems by remember { mutableStateOf<List<String>?>(null) }
@@ -562,11 +574,8 @@ fun AuthenticatedAppShell(
                     launch { courseScheduleModel.refresh() }
                     // 这是用户明确点下首页刷新/失败胶囊后的主动重试，不受自动同步开关限制。
                     launch { phyVlabModel.refresh() }
-                    launch {
-                        if (gradeModel.state.value.courseTypesByCode == null) {
-                            gradeModel.ensureProgramCourseTypes()
-                        }
-                    }
+                    // 培养方案映射只服务成绩页和课表的课程性质配色，首页不读它；
+                    // 登录时已经单独补拉过一次，这里再拉等于每次刷新首页白跑 (1+N) 个请求。
                 }
                 AppSection.GRADES -> gradeModel.refresh()
                 AppSection.SCHEDULE -> {

@@ -1,5 +1,7 @@
 package team.bjtuss.bjtuselfservice.shared.auth
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import team.bjtuss.bjtuselfservice.shared.network.SchoolHttpMethod
 import team.bjtuss.bjtuselfservice.shared.network.SchoolHttpRequest
 import team.bjtuss.bjtuselfservice.shared.network.SchoolHttpTransport
@@ -29,10 +31,22 @@ sealed interface AuthenticationResult {
     data class Failed(val reason: LoginFailure) : AuthenticationResult
 }
 
+/**
+ * 学校登录（CAS/MIS/教务握手）协议。
+ *
+ * 每条流程都由多步、且彼此依赖 cookie 的请求组成（取登录页 → 取验证码图 → 提交凭据 →
+ * 跟随落地），因此同一时刻只能有一条登录流程在跑。这层互斥原先是由 transport 的
+ * 全局请求锁顺带提供的；transport 恢复并发后必须在这里显式补回，否则两条 CAS 流程
+ * （例如用户在登录页重试的同时物理在线触发会话恢复）会互相覆盖 CSRF 与验证码会话。
+ *
+ * 注意：这里只互斥登录流程之间，不与普通数据请求互斥——数据请求并发是这次性能修复的目的。
+ */
 class SchoolLoginProtocol(
     private val transport: SchoolHttpTransport,
 ) : LoginAutomationGateway {
-    suspend fun checkSession(): SessionProbeResult {
+    private val loginMutex = Mutex()
+
+    suspend fun checkSession(): SessionProbeResult = loginMutex.withLock {
         val response = transport.execute(
             SchoolHttpRequest(
                 method = SchoolHttpMethod.GET,
@@ -40,25 +54,25 @@ class SchoolLoginProtocol(
                 headers = mapOf("Referer" to MIS_HOME_URL),
             ),
         )
-        return if (response.finalUrl.matchesEndpoint(MIS_HOME_URL)) {
+        if (response.finalUrl.matchesEndpoint(MIS_HOME_URL)) {
             SessionProbeResult.Active
         } else {
             SessionProbeResult.Missing
         }
     }
 
-    override suspend fun requestCaptchaChallenge(studentId: String): ChallengeResult {
+    override suspend fun requestCaptchaChallenge(studentId: String): ChallengeResult = loginMutex.withLock {
         val sso = transport.execute(SchoolHttpRequest(SchoolHttpMethod.GET, MIS_SSO_URL))
         if (sso.finalUrl.matchesEndpoint(MIS_HOME_URL)) {
-            return when (val profile = parseMisStudentProfile(sso.bodyText(), studentId)) {
+            return@withLock when (val profile = parseMisStudentProfile(sso.bodyText(), studentId)) {
                 is ParseResult.Success -> ChallengeResult.SessionActive(profile.value)
                 is ParseResult.Failure -> ChallengeResult.Failed(LoginFailure.MALFORMED_RESPONSE)
             }
         }
         if (!sso.finalUrl.startsWith(CAS_LOGIN_PREFIX)) {
-            return ChallengeResult.Failed(LoginFailure.MALFORMED_RESPONSE)
+            return@withLock ChallengeResult.Failed(LoginFailure.MALFORMED_RESPONSE)
         }
-        return loadCaptchaChallenge(
+        loadCaptchaChallenge(
             loginPageUrl = sso.finalUrl,
             referer = MIS_SSO_URL,
         )
@@ -71,7 +85,7 @@ class SchoolLoginProtocol(
      * 仍有效，它会直接返回 SessionActive。物理在线恢复需要真正重新拿到 CAS
      * 登录页，因此这里从 CAS 的 SSO 回调入口重新加载 challenge。
      */
-    suspend fun requestFreshCaptchaChallenge(studentId: String): ChallengeResult {
+    suspend fun requestFreshCaptchaChallenge(studentId: String): ChallengeResult = loginMutex.withLock {
         val loginPage = transport.execute(
             SchoolHttpRequest(
                 method = SchoolHttpMethod.GET,
@@ -80,15 +94,15 @@ class SchoolLoginProtocol(
             ),
         )
         if (loginPage.finalUrl.matchesEndpoint(MIS_HOME_URL)) {
-            return when (val profile = parseMisStudentProfile(loginPage.bodyText(), studentId)) {
+            return@withLock when (val profile = parseMisStudentProfile(loginPage.bodyText(), studentId)) {
                 is ParseResult.Success -> ChallengeResult.SessionActive(profile.value)
                 is ParseResult.Failure -> ChallengeResult.Failed(LoginFailure.MALFORMED_RESPONSE)
             }
         }
         if (!loginPage.finalUrl.startsWith(CAS_LOGIN_PREFIX)) {
-            return ChallengeResult.Failed(LoginFailure.MALFORMED_RESPONSE)
+            return@withLock ChallengeResult.Failed(LoginFailure.MALFORMED_RESPONSE)
         }
-        return loadCaptchaChallenge(
+        loadCaptchaChallenge(
             loginPageUrl = loginPage.finalUrl,
             referer = CAS_REFRESH_LOGIN_URL,
         )
@@ -131,12 +145,12 @@ class SchoolLoginProtocol(
         credentials: Credentials,
         challenge: CaptchaChallenge,
         captchaAnswer: String,
-    ): AuthenticationResult {
+    ): AuthenticationResult = loginMutex.withLock {
         if (!credentials.isValid || captchaAnswer.isBlank()) {
-            return AuthenticationResult.Failed(LoginFailure.INVALID_CREDENTIALS)
+            return@withLock AuthenticationResult.Failed(LoginFailure.INVALID_CREDENTIALS)
         }
         if (!challenge.loginPageUrl.startsWith(CAS_LOGIN_PREFIX)) {
-            return AuthenticationResult.Failed(LoginFailure.MALFORMED_RESPONSE)
+            return@withLock AuthenticationResult.Failed(LoginFailure.MALFORMED_RESPONSE)
         }
 
         val response = transport.execute(
@@ -168,19 +182,19 @@ class SchoolLoginProtocol(
             )
         }
         if (!authenticatedHome.finalUrl.matchesEndpoint(MIS_HOME_URL)) {
-            return AuthenticationResult.Failed(LoginFailure.CAPTCHA_REJECTED)
+            return@withLock AuthenticationResult.Failed(LoginFailure.CAPTCHA_REJECTED)
         }
-        return when (val profile = parseMisStudentProfile(authenticatedHome.bodyText(), credentials.username)) {
+        when (val profile = parseMisStudentProfile(authenticatedHome.bodyText(), credentials.username)) {
             is ParseResult.Success -> AuthenticationResult.Success(profile.value)
             is ParseResult.Failure -> AuthenticationResult.Failed(LoginFailure.MALFORMED_RESPONSE)
         }
     }
 
-    suspend fun linkAcademicSystem(): Boolean {
+    suspend fun linkAcademicSystem(): Boolean = loginMutex.withLock {
         val module = transport.execute(SchoolHttpRequest(SchoolHttpMethod.GET, AA_MODULE_URL))
         val redirect = when (val parsed = parseAcademicRedirectUrl(module.bodyText())) {
             is ParseResult.Success -> parsed.value
-            is ParseResult.Failure -> return false
+            is ParseResult.Failure -> return@withLock false
         }
         val response = transport.execute(
             SchoolHttpRequest(
@@ -189,7 +203,7 @@ class SchoolLoginProtocol(
                 headers = mapOf("Referer" to AA_MODULE_URL),
             ),
         )
-        return response.finalUrl.matchesEndpoint(AA_HOME_URL)
+        response.finalUrl.matchesEndpoint(AA_HOME_URL)
     }
 
     fun logout() = transport.clearSession()

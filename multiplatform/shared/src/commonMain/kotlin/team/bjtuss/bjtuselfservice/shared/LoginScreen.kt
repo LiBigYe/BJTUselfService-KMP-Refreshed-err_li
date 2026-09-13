@@ -592,7 +592,9 @@ fun LoginRoute(
         }
         val classroomRepository = remember {
             DefaultClassroomRepository(
-                remote = SchoolClassroomRemoteDataSource(createSchoolHttpTransport()),
+                // 复用会话 transport 的公开旁路：独立空 cookie jar，不会带上学校会话，
+                // 也避免每次登录都为第三方教室接口再造一套客户端与引擎线程池。
+                remote = SchoolClassroomRemoteDataSource(transport.value),
             )
         }
         val classroomModel = remember(classroomRepository) {

@@ -1,0 +1,130 @@
+name: KMP verify
+
+# 只做验证：编译 + 单元测试。不打包发布、不写 Release、不需要任何 Secrets。
+# 目的：在没有本机 Android SDK / 上传签名、也不想占用本机资源的机器上，
+# 用 GitHub runner 复现 `:shared:desktopTest` 与 Android/Windows 目标编译。
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "multiplatform/**"
+      - ".github/workflows/kmp-verify.yml"
+  pull_request:
+    paths:
+      - "multiplatform/**"
+  workflow_dispatch:
+
+concurrency:
+  group: kmp-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  shared-tests:
+    name: Shared tests (JVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: multiplatform
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Run shared desktop tests
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :shared:desktopTest --stacktrace
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-desktop-test-report
+          path: |
+            multiplatform/shared/build/reports/tests/desktopTest
+            multiplatform/shared/build/test-results/desktopTest
+          if-no-files-found: ignore
+
+  android-compile:
+    name: Android assembleDebug (throwaway key)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: multiplatform
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # androidApp 的 minSdk/签名配置要求存在一把上传递签名，否则 Gradle 在配置阶段
+      # 就会 require 失败。这里现生成一把一次性调试钥匙：只证明 Android 目标能编译打包，
+      # 不是发布签名，仓库里不放任何私钥，也不读任何 Secret。
+      - name: Generate throwaway upload keystore
+        run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -v \
+            -keystore "$HOME/.android/bjtu-kmp-upload.keystore" \
+            -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 2 \
+            -dname "CN=CI Debug,O=BJTUselfService,OU=CI,L=Beijing,ST=Beijing,C=CN"
+          {
+            echo "BJTU_ANDROID_KEYSTORE=$HOME/.android/bjtu-kmp-upload.keystore"
+            echo "BJTU_ANDROID_STORE_PASSWORD=android"
+            echo "BJTU_ANDROID_KEY_ALIAS=androiddebugkey"
+            echo "BJTU_ANDROID_KEY_PASSWORD=android"
+          } >> "$GITHUB_ENV"
+
+      - name: Assemble debug APK
+        run: ./gradlew :androidApp:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmp-debug-apk
+          path: multiplatform/androidApp/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  windows-compile:
+    name: Windows desktop compile
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: multiplatform
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Compile Windows target
+        run: .\gradlew.bat :windowsApp:compileKotlinWindows --stacktrace
+
+      - name: Compile macOS/desktop target
+        run: .\gradlew.bat :desktopApp:compileKotlin --stacktrace

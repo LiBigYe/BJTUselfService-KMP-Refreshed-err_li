@@ -1,6 +1,7 @@
 package team.bjtuss.bjtuselfservice.shared.data.otherfunction
 
 import kotlinx.coroutines.CancellationException
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.homework.HomeworkFileContent
 import team.bjtuss.bjtuselfservice.shared.domain.otherfunction.ReportCardLanguage
 
@@ -25,14 +26,16 @@ class DefaultOtherFunctionRepository(
 
     override suspend fun downloadReportCard(
         language: ReportCardLanguage,
-    ): OtherFunctionDownloadResult = try {
-        OtherFunctionDownloadResult.Success(remote.fetchReportCardFile(language))
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: OtherFunctionRemoteException) {
-        OtherFunctionDownloadResult.Failure(error.reason.toSyncFailure())
-    } catch (_: Exception) {
-        OtherFunctionDownloadResult.Failure(OtherFunctionSyncFailure.NETWORK)
+    ): OtherFunctionDownloadResult = onSchoolWork {
+        try {
+            OtherFunctionDownloadResult.Success(remote.fetchReportCardFile(language))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: OtherFunctionRemoteException) {
+            OtherFunctionDownloadResult.Failure(error.reason.toSyncFailure())
+        } catch (_: Exception) {
+            OtherFunctionDownloadResult.Failure(OtherFunctionSyncFailure.NETWORK)
+        }
     }
 }
 

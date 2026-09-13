@@ -3,6 +3,9 @@ package team.bjtuss.bjtuselfservice.shared.auth
 import team.bjtuss.bjtuselfservice.shared.network.SchoolHttpRequest
 import team.bjtuss.bjtuselfservice.shared.network.SchoolHttpResponse
 import team.bjtuss.bjtuselfservice.shared.network.SchoolHttpTransport
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -136,11 +139,57 @@ class SchoolLoginProtocolTest {
         assertEquals(1, transport.clearCount)
     }
 
+    /**
+     * 登录流程必须彼此互斥。
+     *
+     * transport 恢复并发后（见 `KtorSchoolHttpTransport`），这层保证从 transport 挪到了
+     * 协议内部。CAS 每一步都依赖上一步种下的 cookie，两条流程交错会互相覆盖 CSRF 与
+     * 验证码会话，表现为「验证码总是错误」。
+     */
+    @Test
+    fun concurrentLoginFlowsNeverOverlap() = runBlocking {
+        val transport = OverlapProbeTransport()
+        val protocol = SchoolLoginProtocol(transport)
+
+        coroutineScope {
+            List(4) { async { protocol.checkSession() } }.forEach { it.await() }
+        }
+
+        assertEquals(4, transport.callCount)
+        assertEquals(1, transport.maxObservedOverlap)
+    }
+
     private fun response(finalUrl: String, body: String = "", status: Int = 200) = SchoolHttpResponse(
         statusCode = status,
         finalUrl = finalUrl,
         body = body.encodeToByteArray(),
     )
+}
+
+/** 记录同时在飞行中的请求数；任一时刻 >1 说明登录流程被交错执行。 */
+private class OverlapProbeTransport : SchoolHttpTransport {
+    private var inFlight = 0
+    var callCount = 0
+    var maxObservedOverlap = 0
+
+    override suspend fun execute(request: SchoolHttpRequest): SchoolHttpResponse {
+        callCount++
+        inFlight++
+        maxObservedOverlap = maxOf(maxObservedOverlap, inFlight)
+        try {
+            // 让出一次，给真正的并发留下交错窗口。
+            kotlinx.coroutines.yield()
+        } finally {
+            inFlight--
+        }
+        return SchoolHttpResponse(
+            statusCode = 200,
+            finalUrl = "https://mis.bjtu.edu.cn/home/",
+            body = ByteArray(0),
+        )
+    }
+
+    override fun clearSession() = Unit
 }
 
 private class QueueTransport(

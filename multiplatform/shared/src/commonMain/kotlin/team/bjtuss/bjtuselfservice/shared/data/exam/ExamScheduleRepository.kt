@@ -2,6 +2,7 @@ package team.bjtuss.bjtuselfservice.shared.data.exam
 
 import kotlinx.coroutines.CancellationException
 import team.bjtuss.bjtuselfservice.shared.cache.CacheStore
+import team.bjtuss.bjtuselfservice.shared.data.onSchoolWork
 import team.bjtuss.bjtuselfservice.shared.domain.exam.ExamSchedule
 
 data class ExamScheduleSnapshot(val exams: List<ExamSchedule>)
@@ -53,18 +54,18 @@ class DefaultExamScheduleRepository(
 
     override fun load(): ExamScheduleSnapshot = local.load(accountScope)
 
-    override suspend fun refresh(): ExamScheduleRefreshResult {
+    override suspend fun refresh(): ExamScheduleRefreshResult = onSchoolWork {
         val fallback = runCatching(::load).getOrElse { ExamScheduleSnapshot(emptyList()) }
         val remoteExams = try {
             remote.fetchExams()
         } catch (error: CancellationException) {
             throw error
         } catch (error: ExamScheduleRemoteException) {
-            return ExamScheduleRefreshResult.Failure(fallback, error.reason.toSyncFailure())
+            return@onSchoolWork ExamScheduleRefreshResult.Failure(fallback, error.reason.toSyncFailure())
         } catch (_: Exception) {
-            return ExamScheduleRefreshResult.Failure(fallback, ExamScheduleSyncFailure.NETWORK)
+            return@onSchoolWork ExamScheduleRefreshResult.Failure(fallback, ExamScheduleSyncFailure.NETWORK)
         }
-        return try {
+        try {
             local.replace(accountScope, remoteExams)
             ExamScheduleRefreshResult.Success(local.load(accountScope))
         } catch (_: Exception) {

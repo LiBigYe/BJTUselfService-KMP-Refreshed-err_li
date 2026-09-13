@@ -13,8 +13,24 @@ internal sealed interface StrictJsonValue {
     data object NullValue : StrictJsonValue
 }
 
-internal fun parseStrictJsonObject(text: String): Map<String, StrictJsonValue>? = try {
-    val parser = StrictJsonParser(text)
+internal fun parseStrictJsonObject(text: String): Map<String, StrictJsonValue>? =
+    parseJsonObject(text, requireFullyConsumed = true)
+
+/**
+ * 宽松版：解析第一个完整 JSON 对象后忽略尾随内容。
+ *
+ * MIS 的部分老接口会在 JSON 之后追加脚本片段或调试尾巴；把它当成解析失败会让
+ * 整页状态一起丢掉（真实表现为余额卡片长期显示 “—”）。只用于确实不需要严格
+ * 校验整段正文的调用点，智慧教学平台的响应仍走 [parseStrictJsonObject]。
+ */
+internal fun parseLenientJsonObject(text: String): Map<String, StrictJsonValue>? =
+    parseJsonObject(text, requireFullyConsumed = false)
+
+private fun parseJsonObject(
+    text: String,
+    requireFullyConsumed: Boolean,
+): Map<String, StrictJsonValue>? = try {
+    val parser = StrictJsonParser(stripByteOrderMark(text), requireFullyConsumed)
     val value = parser.parse()
     (value as? StrictJsonValue.ObjectValue)?.fields
 } catch (_: IllegalArgumentException) {
@@ -23,12 +39,19 @@ internal fun parseStrictJsonObject(text: String): Map<String, StrictJsonValue>? 
 
 /** 解析 JSON 数组根值（如校历页 hidJson）；根不是数组或解析失败返回 null。 */
 internal fun parseStrictJsonArray(text: String): List<StrictJsonValue>? = try {
-    val parser = StrictJsonParser(text)
+    val parser = StrictJsonParser(stripByteOrderMark(text), requireFullyConsumed = true)
     val value = parser.parse()
     (value as? StrictJsonValue.ArrayValue)?.items
 } catch (_: IllegalArgumentException) {
     null
 }
+
+/**
+ * UTF-8 BOM 解码后是 U+FEFF，不属于 JSON 空白；`JSONObject` 时代的对照实现
+ * 能容忍它，这里也必须容忍，否则整份响应会被判定为无法解析。
+ */
+private fun stripByteOrderMark(text: String): String =
+    if (text.startsWith('\uFEFF')) text.substring(1) else text
 
 internal fun Map<String, StrictJsonValue>.hasSuccessStatus(): Boolean = when (val status = string("STATUS")) {
     null, "", "0" -> true
@@ -65,14 +88,18 @@ internal fun Map<String, StrictJsonValue>.arrayOrBlank(name: String): List<Stric
 internal fun StrictJsonValue?.asObject(): Map<String, StrictJsonValue>? =
     (this as? StrictJsonValue.ObjectValue)?.fields
 
-private class StrictJsonParser(private val source: String) {
+private class StrictJsonParser(
+    private val source: String,
+    /** false 时只要求第一个值解析成功，尾随内容不再让整次解析失败。 */
+    private val requireFullyConsumed: Boolean = true,
+) {
     private var index = 0
 
     fun parse(): StrictJsonValue {
         skipWhitespace()
         val value = parseValue()
         skipWhitespace()
-        require(index == source.length)
+        if (requireFullyConsumed) require(index == source.length)
         return value
     }
 

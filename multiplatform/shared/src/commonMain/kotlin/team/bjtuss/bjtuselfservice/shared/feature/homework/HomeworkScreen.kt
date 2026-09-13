@@ -1110,9 +1110,13 @@ private fun HomeworkDetailSheetBody(
             )
         }
         Text("作业要求", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        // 作业要求是 HTML：不 remember 会在每次重组（下载进度、提交状态变化）重跑整段
+        // Ksoup DOM 解析 + 正则归一化。
+        val requirementText = remember(detail?.content) {
+            schoolRichTextToPlainMultiline(detail?.content).ifBlank { "老师未填写文字要求。" }
+        }
         Text(
-            schoolRichTextToPlainMultiline(detail?.content)
-                .ifBlank { "老师未填写文字要求。" },
+            requirementText,
             style = MaterialTheme.typography.bodyLarge,
         )
         Text("老师提供的附件", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
