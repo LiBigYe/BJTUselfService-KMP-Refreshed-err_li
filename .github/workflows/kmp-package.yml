@@ -1,5 +1,14 @@
 name: KMP package
 
+# 打包/发布工作流。只在打 `v*-KMP*` 标签或手动触发时运行，普通 push 不会消耗额度。
+#
+# fork 上使用前必须补齐 4 个仓库 Secret，否则 android job 会在
+# “Restore Android upload keystore” 一步直接失败：
+#   BJTU_ANDROID_KEYSTORE_BASE64  —— keystore 文件的 base64（不是密码）
+#   BJTU_ANDROID_STORE_PASSWORD   —— keystore 密码
+#   BJTU_ANDROID_KEY_ALIAS        —— 别名
+#   BJTU_ANDROID_KEY_PASSWORD     —— 该别名对应的密码
+# fork 不会继承上游的 Secret，必须自己加一次。
 on:
   push:
     tags:
