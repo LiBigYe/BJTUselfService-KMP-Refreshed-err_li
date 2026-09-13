@@ -109,7 +109,7 @@ jobs:
       - name: Assemble debug APK
         run: ./gradlew :androidApp:assembleDebug --stacktrace
 
-      # 把签名证书指纹打进日志：能和本地 `keytool -list` 的结果对上，才算真的用了你的钥匙。
+      # 把签名证书指纹打进日志：能和本地 `keytool -list -v` 的结果对上，才算真的用了你的钥匙。
       - name: Print APK signer certificate
         run: |
           APK="$(find androidApp/build/outputs/apk/debug -name '*.apk' | head -n 1)"
@@ -117,7 +117,12 @@ jobs:
           SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           APKSIGNER="$(find "$SDK/build-tools" -type f -name apksigner | sort | tail -n 1)"
           echo "apksigner=$APKSIGNER"
-          "$APKSIGNER" verify --print-certs "$APK" | head -n 8
+          # 不用管道接 head：管道会让退出码变成 head 的，也会把输出吞掉。
+          "$APKSIGNER" verify --print-certs "$APK" > signer.txt 2>&1 || true
+          echo "----- apksigner 输出开始 -----"
+          cat signer.txt
+          echo "----- apksigner 输出结束 -----"
+          grep -E "SHA-256 digest|SHA-1 digest|certificate DN" signer.txt || true
 
       - name: Rename APK
         id: artifact
@@ -159,3 +164,52 @@ jobs:
 
       - name: Compile macOS/desktop target
         run: .\gradlew.bat :desktopApp:compileKotlin --stacktrace
+
+  windows-msi:
+    name: Windows MSI
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: multiplatform
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Check jpackage
+        run: |
+          $jp = Join-Path $env:JAVA_HOME "bin\jpackage.exe"
+          if (-not (Test-Path $jp)) { throw "jpackage missing: $jp" }
+          & $jp --version
+
+      # build.gradle.kts 里的 javaHome 默认值写的是作者本机路径，必须在这里覆盖。
+      # 包名/描述用 ASCII：中文 description 会让 WiX light.exe 报 311。
+      - name: Build MSI
+        run: |
+          $env:WINDOWS_PACKAGE_JAVA_HOME = $env:JAVA_HOME
+          $env:WINDOWS_PACKAGE_NAME = "BJTUselfServiceKMP"
+          $env:WINDOWS_PACKAGE_DESCRIPTION = "BJTU Self Service KMP"
+          $env:JAVA_TOOL_OPTIONS = "-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8"
+          .\gradlew.bat :windowsApp:packageMsi --no-daemon --stacktrace
+
+      - name: Print jpackage logs
+        if: failure()
+        run: |
+          Get-ChildItem -Recurse "windowsApp\build\compose\logs","windowsApp\build\jpackage-shim" -Include *.txt,*.log -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "===== $($_.FullName) ====="
+            Get-Content -LiteralPath $_.FullName -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmp-windows-msi
+          path: multiplatform/windowsApp/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: error
