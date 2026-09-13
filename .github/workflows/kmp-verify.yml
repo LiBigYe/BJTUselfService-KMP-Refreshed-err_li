@@ -31,10 +31,10 @@ jobs:
         working-directory: multiplatform
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -47,7 +47,7 @@ jobs:
 
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: shared-desktop-test-report
           path: |
@@ -64,17 +64,17 @@ jobs:
         working-directory: multiplatform
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       # androidApp 在配置阶段就 require 上传递签名存在，没有它整个 Gradle 都配置不了。
       # 有仓库 secret 时用你自己的钥匙（可覆盖安装自己之前的包）；
@@ -135,7 +135,7 @@ jobs:
           ls -lh "$NAME"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kmp-android-apk
           path: multiplatform/${{ steps.artifact.outputs.file }}
@@ -150,10 +150,10 @@ jobs:
         working-directory: multiplatform
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -174,10 +174,10 @@ jobs:
         working-directory: multiplatform
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -208,7 +208,7 @@ jobs:
           }
 
       - name: Upload MSI
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kmp-windows-msi
           path: multiplatform/windowsApp/build/compose/binaries/main/msi/*.msi
