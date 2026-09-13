@@ -1,0 +1,12 @@
+name: ZZ probe (delete me)
+
+# 一次性探针：只用于确认「新增 workflow 文件是否会注册工作流」。
+# 没有任何 push/tag 触发器，只有手动触发。验证完就删。
+on:
+  workflow_dispatch:
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo probe
