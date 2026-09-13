@@ -1,8 +1,7 @@
 name: KMP verify
 
-# 只做验证：编译 + 单元测试。不打包发布、不写 Release、不需要任何 Secrets。
-# 目的：在没有本机 Android SDK / 上传签名、也不想占用本机资源的机器上，
-# 用 GitHub runner 复现 `:shared:desktopTest` 与 Android/Windows 目标编译。
+# 编译 + 单测 + 产出可直接安装的 Android APK。
+# 不写 Release、不打 tag，push 就能在 Actions 页面下载产物。
 on:
   push:
     branches:
@@ -56,8 +55,8 @@ jobs:
             multiplatform/shared/build/test-results/desktopTest
           if-no-files-found: ignore
 
-  android-compile:
-    name: Android assembleDebug (throwaway key)
+  android-apk:
+    name: Android APK (signed)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -77,32 +76,64 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # androidApp 的 minSdk/签名配置要求存在一把上传递签名，否则 Gradle 在配置阶段
-      # 就会 require 失败。这里现生成一把一次性调试钥匙：只证明 Android 目标能编译打包，
-      # 不是发布签名，仓库里不放任何私钥，也不读任何 Secret。
-      - name: Generate throwaway upload keystore
+      # androidApp 在配置阶段就 require 上传递签名存在，没有它整个 Gradle 都配置不了。
+      # 有仓库 secret 时用你自己的钥匙（可覆盖安装自己之前的包）；
+      # 没有时（例如来自 fork 的 PR）退化成一次性调试钥匙，只保证能编译，产物不可安装。
+      - name: Restore upload keystore
+        env:
+          BJTU_ANDROID_KEYSTORE_BASE64: ${{ secrets.BJTU_ANDROID_KEYSTORE_BASE64 }}
+          BJTU_ANDROID_STORE_PASSWORD: ${{ secrets.BJTU_ANDROID_STORE_PASSWORD }}
+          BJTU_ANDROID_KEY_ALIAS: ${{ secrets.BJTU_ANDROID_KEY_ALIAS }}
+          BJTU_ANDROID_KEY_PASSWORD: ${{ secrets.BJTU_ANDROID_KEY_PASSWORD }}
         run: |
           mkdir -p "$HOME/.android"
-          keytool -genkeypair -v \
-            -keystore "$HOME/.android/bjtu-kmp-upload.keystore" \
-            -storepass android -keypass android \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 2 \
-            -dname "CN=CI Debug,O=BJTUselfService,OU=CI,L=Beijing,ST=Beijing,C=CN"
-          {
-            echo "BJTU_ANDROID_KEYSTORE=$HOME/.android/bjtu-kmp-upload.keystore"
-            echo "BJTU_ANDROID_STORE_PASSWORD=android"
-            echo "BJTU_ANDROID_KEY_ALIAS=androiddebugkey"
-            echo "BJTU_ANDROID_KEY_PASSWORD=android"
-          } >> "$GITHUB_ENV"
+          KEYSTORE="$HOME/.android/bjtu-kmp-upload.keystore"
+          if [ -n "$BJTU_ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$BJTU_ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+            echo "keystore_source=repository-secret（你自己的钥匙，产物可安装）"
+            echo "BJTU_ANDROID_STORE_PASSWORD=$BJTU_ANDROID_STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "BJTU_ANDROID_KEY_ALIAS=$BJTU_ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "BJTU_ANDROID_KEY_PASSWORD=$BJTU_ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -v -keystore "$KEYSTORE" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 2 \
+              -dname "CN=CI Debug,O=BJTUselfService,OU=CI,L=Beijing,ST=Beijing,C=CN"
+            echo "keystore_source=throwaway（无 secret，产物仅用于验证编译）"
+            echo "BJTU_ANDROID_STORE_PASSWORD=android" >> "$GITHUB_ENV"
+            echo "BJTU_ANDROID_KEY_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
+            echo "BJTU_ANDROID_KEY_PASSWORD=android" >> "$GITHUB_ENV"
+          fi
+          echo "BJTU_ANDROID_KEYSTORE=$KEYSTORE" >> "$GITHUB_ENV"
 
       - name: Assemble debug APK
         run: ./gradlew :androidApp:assembleDebug --stacktrace
 
+      # 把签名证书指纹打进日志：能和本地 `keytool -list` 的结果对上，才算真的用了你的钥匙。
+      - name: Print APK signer certificate
+        run: |
+          APK="$(find androidApp/build/outputs/apk/debug -name '*.apk' | head -n 1)"
+          echo "apk=$APK"
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          APKSIGNER="$(find "$SDK/build-tools" -type f -name apksigner | sort | tail -n 1)"
+          echo "apksigner=$APKSIGNER"
+          "$APKSIGNER" verify --print-certs "$APK" | head -n 8
+
+      - name: Rename APK
+        id: artifact
+        run: |
+          APK="$(find androidApp/build/outputs/apk/debug -name '*.apk' | head -n 1)"
+          test -n "$APK"
+          NAME="BJTUSelfService-KMP-debug-$(git rev-parse --short HEAD).apk"
+          cp "$APK" "$NAME"
+          echo "file=$NAME" >> "$GITHUB_OUTPUT"
+          ls -lh "$NAME"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: kmp-debug-apk
-          path: multiplatform/androidApp/build/outputs/apk/debug/*.apk
+          name: kmp-android-apk
+          path: multiplatform/${{ steps.artifact.outputs.file }}
           if-no-files-found: error
 
   windows-compile:
